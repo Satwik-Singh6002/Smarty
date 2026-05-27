@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Lock, Unlock, User } from 'lucide-react';
+import { Lock, Unlock, User, Power } from 'lucide-react';
 
 const AuthLock = ({ socket, onAuthenticated, onAnimationComplete }) => {
     const [frameSrc, setFrameSrc] = useState(null);
@@ -11,10 +11,15 @@ const AuthLock = ({ socket, onAuthenticated, onAnimationComplete }) => {
     const [isRegistering, setIsRegistering] = useState(false);
 
     useEffect(() => {
-        if (!socket) return;
+        if (!socket) {
+            console.warn("[AuthLock] No socket object provided.");
+            return;
+        }
+
+        console.log("[AuthLock] Mounted. Socket connected status:", socket.connected);
 
         const handleAuthStatus = (data) => {
-            console.log("Auth Status:", data);
+            console.log("[AuthLock] Received auth_status:", data);
             if (data.authenticated && !isUnlocking) {
                 // Start Unlock Sequence
                 setIsUnlocking(true);
@@ -46,14 +51,14 @@ const AuthLock = ({ socket, onAuthenticated, onAnimationComplete }) => {
         };
 
         const handleRegistrationSuccess = (data) => {
-            console.log("Registration Success:", data);
+            console.log("[AuthLock] Received registration_success:", data);
             setMessage("Face registered successfully!");
             setNeedsRegistration(false);
             setIsRegistering(false);
         };
 
         const handleError = (data) => {
-            console.error("Auth Lock Error:", data);
+            console.error("[AuthLock] Received error:", data);
             if (data.msg) {
                 setMessage(data.msg);
             }
@@ -65,15 +70,28 @@ const AuthLock = ({ socket, onAuthenticated, onAnimationComplete }) => {
         socket.on('error', handleError);
 
         // Check registration on load
+        console.log("[AuthLock] Emitting check_registration...");
         socket.emit('check_registration');
 
         return () => {
+            console.log("[AuthLock] Unmounting / cleaning up listeners.");
             socket.off('auth_status', handleAuthStatus);
             socket.off('auth_frame', handleAuthFrame);
             socket.off('registration_success', handleRegistrationSuccess);
             socket.off('error', handleError);
         };
     }, [socket, onAuthenticated, onAnimationComplete, isUnlocking]);
+
+    const handleExit = () => {
+        console.log("[AuthLock] Exit requested");
+        try {
+            const { ipcRenderer } = window.require('electron');
+            ipcRenderer.send('window-close');
+        } catch (err) {
+            console.log("Not running in Electron, closing window...");
+            window.close();
+        }
+    };
 
     const themeColor = isUnlocking ? 'text-green-500' : 'text-cyan-500';
     const borderColor = isUnlocking ? 'border-green-500' : 'border-cyan-500';
@@ -83,12 +101,23 @@ const AuthLock = ({ socket, onAuthenticated, onAnimationComplete }) => {
         : 'from-cyan-900/20 via-black to-black';
 
     return (
-
         <div className={`fixed inset-0 z-[9999] bg-black flex flex-col items-center justify-center font-mono select-none transition-all duration-[2000ms] ${isUnlocking ? 'opacity-0 scale-110 pointer-events-none' : 'opacity-100'}`}
             style={{ transitionDelay: '2000ms' }}> {/* Delay fade out to show success state */}
 
             {/* Background Grid */}
             <div className={`absolute inset-0 bg-[radial-gradient(circle_at_center,_var(--tw-gradient-stops))] ${bgGradient} pointer-events-none transition-colors duration-[1500ms]`}></div>
+
+            {/* Top Bar Actions / Exit Button */}
+            {!isUnlocking && (
+                <button
+                    onClick={handleExit}
+                    className="absolute top-6 right-6 p-2 border border-red-500/30 rounded bg-red-950/20 text-red-400 hover:bg-red-500/30 transition-all flex items-center justify-center gap-1.5 text-xs font-mono tracking-wider z-50 cursor-pointer active:scale-95"
+                    title="Exit Application"
+                >
+                    <Power size={14} />
+                    Exit
+                </button>
+            )}
 
             <div className={`relative flex flex-col items-center gap-6 p-10 border ${borderColor}/30 rounded-lg bg-black/80 backdrop-blur-xl ${shadowColor} transition-all duration-[1500ms]`}>
                 <div className={`text-3xl font-bold tracking-[0.3em] uppercase drop-shadow-[0_0_10px_currentColor] flex items-center gap-4 ${themeColor} transition-colors duration-1000`}>
@@ -138,14 +167,20 @@ const AuthLock = ({ socket, onAuthenticated, onAnimationComplete }) => {
                     <div className="mt-2 w-full flex justify-center">
                         {!isRegistering ? (
                             <button
-                                onClick={() => socket.emit('start_registration')}
+                                onClick={() => {
+                                    console.log("[AuthLock] Emitting start_registration...");
+                                    socket.emit('start_registration');
+                                }}
                                 className="px-4 py-2 border border-cyan-500/50 rounded bg-cyan-950/40 text-cyan-400 font-mono text-xs uppercase tracking-widest hover:bg-cyan-500/20 transition-all shadow-[0_0_15px_rgba(6,182,212,0.1)] active:scale-95"
                             >
                                 Start Face Registration
                             </button>
                         ) : (
                             <button
-                                onClick={() => socket.emit('capture_registration')}
+                                onClick={() => {
+                                    console.log("[AuthLock] Emitting capture_registration...");
+                                    socket.emit('capture_registration');
+                                }}
                                 className="px-4 py-2 border border-green-500/50 rounded bg-green-950/40 text-green-400 font-mono text-xs uppercase tracking-widest hover:bg-green-500/20 transition-all shadow-[0_0_15px_rgba(34,197,94,0.1)] active:scale-95 animate-pulse"
                             >
                                 Capture & Register Face

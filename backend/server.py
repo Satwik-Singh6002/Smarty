@@ -1492,6 +1492,7 @@ async def check_registration(sid):
     global authenticator
     is_registered = authenticator.is_registered() if authenticator else False
     face_auth_on = SETTINGS.get("face_auth_enabled", False)
+    print(f"[SERVER] check_registration called from sid: {sid}. is_registered: {is_registered}, face_auth_enabled: {face_auth_on}")
     
     await sio.emit('registration_status', {'registered': is_registered})
     

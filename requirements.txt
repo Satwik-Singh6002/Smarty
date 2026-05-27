@@ -1,0 +1,36 @@
+fastapi
+uvicorn
+python-socketio
+python-multipart
+# Google GenAI SDK (v1beta) - for Gemini audio mode
+google-genai
+# OpenAI SDK - for OpenRouter text mode
+openai
+# Computer Vision & Audio
+opencv-python
+pyaudio
+pillow
+mss
+# Browser Automation
+playwright
+# Smart Home
+python-kasa
+# 3D Printing
+zeroconf>=0.131.0
+aiohttp>=3.9.0
+# Utilities
+python-dotenv
+# Face & Hand tracking
+mediapipe
+# CAD Generation
+build123d
+# Wake Word Detection
+openwakeword
+SpeechRecognition
+# System Control
+pyautogui
+psutil
+pyperclip
+# JARVIS Voice (Edge TTS Neural Voices)
+edge-tts
+pygame

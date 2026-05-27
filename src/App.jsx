@@ -11,6 +11,7 @@ import { Mic, MicOff, Settings, X, Minus, Power, Video, VideoOff, Layout, Hand, 
 import { FilesetResolver, HandLandmarker, FaceLandmarker } from '@mediapipe/tasks-vision';
 // MemoryPrompt removed - memory is now actively saved to project
 import ConfirmationPopup from './components/ConfirmationPopup';
+import AuthLock from './components/AuthLock';
 
 import KasaWindow from './components/KasaWindow';
 import PrinterWindow from './components/PrinterWindow';
@@ -32,7 +33,7 @@ function App() {
     const [status, setStatus] = useState('Disconnected');
     const [socketConnected, setSocketConnected] = useState(socket.connected); // Track socket connection reactively
     // Auth State
-    const [isAuthenticated, setIsAuthenticated] = useState(true);
+    const [isAuthenticated, setIsAuthenticated] = useState(false);
 
     // Initialize from LocalStorage to prevent flash of UI
     const [isLockScreenVisible, setIsLockScreenVisible] = useState(false);
@@ -41,6 +42,7 @@ function App() {
     const [faceAuthEnabled, setFaceAuthEnabled] = useState(() => {
         return localStorage.getItem('face_auth_enabled') === 'true';
     });
+    const [isFaceRegistered, setIsFaceRegistered] = useState(false);
 
 
     const [isConnected, setIsConnected] = useState(true); // Power state DEFAULT ON
@@ -359,17 +361,10 @@ function App() {
             console.log("Auth Status:", data);
             setIsAuthenticated(data.authenticated);
             if (data.authenticated) {
-                // If authenticated, hide lock screen with animation (handled by component if visible)
-                // But simpler: just hide it
-                // Actually, wait for animation if it WAS visible.
-                // For now, let's just assume if authenticated -> hide
-                // But we want the component to invoke onAnimationComplete.
-                // If we are starting up (and face auth disabled), we want it FALSE immediately.
-                if (!isLockScreenVisible) {
-                    // Do nothing, already hidden
-                }
+                // Authenticated - hide lock screen after animation
+                // Don't immediately hide - let AuthLock handle its animation
             } else {
-                // If NOT authenticated, show lock screen
+                // Not authenticated - show lock screen
                 setIsLockScreenVisible(true);
             }
         });
@@ -379,6 +374,9 @@ function App() {
             if (settings && typeof settings.face_auth_enabled !== 'undefined') {
                 setFaceAuthEnabled(settings.face_auth_enabled);
                 localStorage.setItem('face_auth_enabled', settings.face_auth_enabled);
+            }
+            if (settings && typeof settings.is_face_registered !== 'undefined') {
+                setIsFaceRegistered(settings.is_face_registered);
             }
         });
         socket.on('error', (data) => {
@@ -1780,6 +1778,8 @@ function App() {
                         setSelectedWebcamId={setSelectedWebcamId}
                         cursorSensitivity={cursorSensitivity}
                         setCursorSensitivity={setCursorSensitivity}
+                        faceAuthEnabled={faceAuthEnabled}
+                        isFaceRegistered={isFaceRegistered}
                         onClose={() => setShowSettings(false)}
                     />
                 )}
@@ -1939,6 +1939,19 @@ function App() {
                     onDeny={handleDenyTool}
                 />
             </div>
+
+            {/* Face Authentication Lock Screen */}
+            {isLockScreenVisible && !isAuthenticated && (
+                <AuthLock
+                    socket={socket}
+                    onAuthenticated={(val) => {
+                        setIsAuthenticated(val);
+                    }}
+                    onAnimationComplete={() => {
+                        setIsLockScreenVisible(false);
+                    }}
+                />
+            )}
         </div>
     );
 }

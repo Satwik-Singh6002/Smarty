@@ -157,11 +157,34 @@ load_settings()
 
 def get_settings_payload():
     payload = SETTINGS.copy()
-    payload["is_face_registered"] = False
-    payload["face_auth_enabled"] = False
+    payload["is_face_registered"] = authenticator.is_registered() if authenticator else False
+    payload["face_auth_enabled"] = SETTINGS.get("face_auth_enabled", False)
     return payload
 
-authenticator = None
+# Initialize face authenticator with socket callbacks
+def _create_authenticator():
+    """Create a FaceAuthenticator with socket.io callbacks."""
+    ref_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "reference.jpg")
+    
+    async def on_auth_status_change(is_authenticated):
+        await sio.emit('auth_status', {'authenticated': is_authenticated})
+    
+    async def on_auth_frame(frame_b64):
+        await sio.emit('auth_frame', {'image': frame_b64})
+    
+    return FaceAuthenticator(
+        reference_image_path=ref_path,
+        on_status_change=on_auth_status_change,
+        on_frame=on_auth_frame
+    )
+
+try:
+    authenticator = _create_authenticator()
+    print(f"[SERVER] Face authenticator initialized. Registered: {authenticator.is_registered()}")
+except Exception as e:
+    print(f"[SERVER] Face authenticator init failed: {e}")
+    authenticator = None
+
 kasa_agent = KasaAgent(known_devices=SETTINGS.get("kasa_devices"))
 # tool_permissions is now SETTINGS["tool_permissions"]
 
@@ -285,8 +308,16 @@ async def status():
 async def connect(sid, environ):
     print(f"Client connected: {sid}")
     await sio.emit('status', {'msg': 'Connected to A.D.A Backend'}, room=sid)
-    # Always auto-authenticate since face auth is disabled/removed
-    await sio.emit('auth_status', {'authenticated': True})
+    # Check face auth status
+    face_auth_on = SETTINGS.get("face_auth_enabled", False)
+    face_registered = authenticator.is_registered() if authenticator else False
+    if face_auth_on and face_registered:
+        print(f"[SERVER] Face auth enabled & registered. Requiring authentication.")
+        await sio.emit('auth_status', {'authenticated': False}, room=sid)
+    else:
+        await sio.emit('auth_status', {'authenticated': True}, room=sid)
+    # Send current settings
+    await sio.emit('settings', get_settings_payload(), room=sid)
 
 @sio.event
 async def disconnect(sid):
@@ -1339,12 +1370,17 @@ async def update_settings(sid, data):
             
     if "face_auth_enabled" in data:
         SETTINGS["face_auth_enabled"] = data["face_auth_enabled"]
-        # If turned OFF, maybe emit auth status true?
         if not data["face_auth_enabled"]:
-             await sio.emit('auth_status', {'authenticated': True})
-             # Stop auth loop if running?
-             if authenticator:
-                 authenticator.stop() 
+            # Turning OFF face auth -> auto-authenticate
+            await sio.emit('auth_status', {'authenticated': True})
+            if authenticator:
+                authenticator.stop()
+        else:
+            # Turning ON face auth -> check if face is registered
+            if authenticator and authenticator.is_registered():
+                print("[SERVER] Face auth enabled. Lock will apply on next connection.")
+            else:
+                print("[SERVER] Face auth enabled but no face registered. Please register a face first.")
 
     if "camera_flipped" in data:
         SETTINGS["camera_flipped"] = data["camera_flipped"]
@@ -1442,29 +1478,111 @@ async def resume_wake_word(sid):
 
 @sio.event
 async def logout(sid):
-    # Face lock is removed, logout does nothing
-    await sio.emit('auth_status', {'authenticated': True})
+    """Lock the system - require re-authentication."""
+    global authenticator
+    print("[SERVER] Logout requested. Locking system.")
+    if authenticator:
+        authenticator.authenticated = False
+        authenticator.running = False
+    await sio.emit('auth_status', {'authenticated': False})
 
 @sio.event
 async def check_registration(sid):
-    await sio.emit('registration_status', {'registered': False})
-    await sio.emit('auth_status', {'authenticated': True})
+    """Check if a face is registered and handle auth flow."""
+    global authenticator
+    is_registered = authenticator.is_registered() if authenticator else False
+    face_auth_on = SETTINGS.get("face_auth_enabled", False)
+    
+    await sio.emit('registration_status', {'registered': is_registered})
+    
+    if not face_auth_on:
+        # Face auth is disabled, auto-authenticate
+        await sio.emit('auth_status', {'authenticated': True})
+    elif not is_registered:
+        # No face registered, prompt for registration
+        await sio.emit('auth_status', {'authenticated': False, 'needs_registration': True})
+    else:
+        # Face is registered, start auth loop
+        await sio.emit('auth_status', {'authenticated': False})
+        try:
+            await authenticator.start_authentication_loop()
+        except Exception as e:
+            print(f"[SERVER] Auth loop error: {e}")
+            await sio.emit('error', {'msg': f"Authentication error: {str(e)}"})
 
 @sio.event
 async def start_registration(sid):
-    pass
+    """Start the face registration camera loop."""
+    global authenticator
+    print("[SERVER] Starting face registration...")
+    if not authenticator:
+        try:
+            authenticator = _create_authenticator()
+        except Exception as e:
+            await sio.emit('error', {'msg': f"Failed to create authenticator: {str(e)}"})
+            return
+    
+    success = authenticator.start_registration_loop()
+    if success:
+        await sio.emit('auth_status', {'authenticated': False, 'is_registering': True})
+    else:
+        await sio.emit('error', {'msg': 'A face is already registered. Clear face data first.'})
 
 @sio.event
 async def capture_registration(sid):
-    pass
+    """Capture the current frame and register it as the reference face."""
+    global authenticator
+    print("[SERVER] Capturing face for registration...")
+    if not authenticator:
+        await sio.emit('error', {'msg': 'Authenticator not initialized.'})
+        return
+    
+    success, message = authenticator.register_current_face()
+    if success:
+        # Enable face auth in settings
+        SETTINGS["face_auth_enabled"] = True
+        save_settings()
+        await sio.emit('registration_success', {'message': message})
+        await sio.emit('auth_status', {'authenticated': True})
+        await sio.emit('settings', get_settings_payload())
+        print(f"[SERVER] Face registered successfully. Face auth enabled.")
+    else:
+        await sio.emit('error', {'msg': message})
 
 @sio.event
 async def reset_registration(sid):
-    pass
+    """Reset (delete) face registration and re-register."""
+    global authenticator
+    print("[SERVER] Resetting face registration...")
+    if authenticator:
+        authenticator.delete_registration()
+    # Recreate authenticator for fresh state
+    try:
+        authenticator = _create_authenticator()
+    except Exception as e:
+        print(f"[SERVER] Authenticator recreate failed: {e}")
+    await sio.emit('registration_status', {'registered': False})
+    await sio.emit('settings', get_settings_payload())
 
 @sio.event
 async def delete_registration(sid):
-    pass
+    """Delete the registered face data."""
+    global authenticator
+    print("[SERVER] Deleting face registration...")
+    if authenticator:
+        authenticator.delete_registration()
+    # Disable face auth since there's no face to authenticate against
+    SETTINGS["face_auth_enabled"] = False
+    save_settings()
+    # Recreate authenticator for fresh state
+    try:
+        authenticator = _create_authenticator()
+    except Exception as e:
+        print(f"[SERVER] Authenticator recreate failed: {e}")
+    await sio.emit('auth_status', {'authenticated': True})
+    await sio.emit('registration_status', {'registered': False})
+    await sio.emit('settings', get_settings_payload())
+    print("[SERVER] Face data cleared. Face auth disabled.")
 
 if __name__ == "__main__":
     uvicorn.run(

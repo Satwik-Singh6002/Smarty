@@ -84,8 +84,8 @@ function startPythonBackend() {
 
     // Check if virtual environment python exists (in workspace root relative to electron folder)
     const venvPaths = [
-        path.join(__dirname, '../../.venv/Scripts/python.exe'),
-        path.join(__dirname, '../../.venv/bin/python')
+        path.join(__dirname, '../.venv/Scripts/python.exe'),
+        path.join(__dirname, '../.venv/bin/python')
     ];
 
     for (const venvPath of venvPaths) {

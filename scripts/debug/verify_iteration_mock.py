@@ -4,7 +4,10 @@ import sys
 import asyncio
 from unittest.mock import MagicMock, AsyncMock, patch
 
-# Add current directory to path to import cad_agent
+# Add backend directory to path
+backend_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'backend'))
+if backend_dir not in sys.path:
+    sys.path.insert(0, backend_dir)
 sys.path.append(os.getcwd())
 
 # Mock dependencies that might be missing or require API keys

@@ -102,8 +102,10 @@ class PrinterAgent:
     Handles 3D printer discovery, profile management, slicing, and print job submission.
     """
     
-    def __init__(self, profiles_dir: str = "printer_profiles"):
+    def __init__(self, profiles_dir: Optional[str] = None):
         self.printers: Dict[str, Printer] = {}  # host -> Printer
+        if profiles_dir is None:
+            profiles_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "printer_profiles")
         self.profiles_dir = profiles_dir
         self._zeroconf: Optional[Zeroconf] = None
         self._error_tracker = set() # Track hosts with errors to prevent log spam
@@ -113,7 +115,7 @@ class PrinterAgent:
         self._orca_profiles_dir = self._detect_orca_profiles_dir()
         
         # Ensure profiles directory exists
-        os.makedirs(profiles_dir, exist_ok=True)
+        os.makedirs(self.profiles_dir, exist_ok=True)
     
     def _detect_orca_profiles_dir(self) -> Optional[str]:
         """Detect OrcaSlicer profiles directory."""

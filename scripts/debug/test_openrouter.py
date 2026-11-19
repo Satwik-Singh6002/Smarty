@@ -1,4 +1,11 @@
+import os
+import sys
 import asyncio
+
+backend_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'backend'))
+if backend_dir not in sys.path:
+    sys.path.insert(0, backend_dir)
+
 from openrouter_client import OpenRouterClient
 from text_chat_loop import TOOLS
 

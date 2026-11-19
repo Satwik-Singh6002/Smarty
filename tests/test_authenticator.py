@@ -90,10 +90,11 @@ class TestLandmarkExtraction:
         # Create a blank image
         blank_image = np.zeros((480, 640, 3), dtype=np.uint8)
         
-        landmarks = auth._extract_landmarks(blank_image)
+        landmarks, coords = auth._extract_landmarks(blank_image)
         
         # Blank image should have no face
         assert landmarks is None
+        assert coords is None
         print("No face detected in blank image (correct)")
     
     def test_extract_landmarks_format(self, auth):
@@ -110,38 +111,38 @@ class TestLandmarkComparison:
         """Test comparing identical landmarks."""
         auth = FaceAuthenticator()
         
-        # Create mock landmarks (468 points * 3 coords = 1404 values)
-        landmarks = np.random.rand(1404).astype(np.float32)
+        # Create mock normalized landmarks (478 points * 3 coords = 1434 values)
+        landmarks = np.random.rand(1434).astype(np.float32)
+        landmarks = landmarks / np.linalg.norm(landmarks)
         
-        result = auth._compare_landmarks(landmarks, landmarks)
-        assert result == True
-        print("Identical landmarks comparison: True (correct)")
+        is_match, sim = auth._compare_landmarks(landmarks, landmarks)
+        assert is_match == True
+        assert sim >= 0.9
+        print(f"Identical landmarks comparison: match={is_match}, sim={sim:.4f} (correct)")
     
     def test_compare_different_landmarks(self):
         """Test comparing completely different landmarks."""
         auth = FaceAuthenticator()
         
-        landmarks1 = np.random.rand(1404).astype(np.float32)
-        landmarks2 = np.random.rand(1404).astype(np.float32)
+        landmarks1 = np.random.rand(1434).astype(np.float32)
+        landmarks1 = landmarks1 / np.linalg.norm(landmarks1)
+        landmarks2 = -landmarks1
         
-        result = auth._compare_landmarks(landmarks1, landmarks2)
-        # Random vectors should likely be different
-        print(f"Random landmarks comparison: {result}")
+        is_match, sim = auth._compare_landmarks(landmarks1, landmarks2)
+        assert is_match == False
+        print(f"Opposite landmarks comparison: match={is_match}, sim={sim:.4f}")
     
     def test_compare_with_threshold(self):
-        """Test comparison with different thresholds."""
+        """Test comparison with similarity scoring."""
         auth = FaceAuthenticator()
         
-        landmarks1 = np.ones(1404, dtype=np.float32)
-        landmarks2 = np.ones(1404, dtype=np.float32) * 0.99  # Very similar
+        landmarks1 = np.ones(1434, dtype=np.float32)
+        landmarks1 = landmarks1 / np.linalg.norm(landmarks1)
         
-        # Should pass with high threshold
-        result_high = auth._compare_landmarks(landmarks1, landmarks2, threshold=0.5)
-        print(f"High threshold (0.5) result: {result_high}")
-        
-        # May fail with low threshold
-        result_low = auth._compare_landmarks(landmarks1, landmarks2, threshold=0.001)
-        print(f"Low threshold (0.001) result: {result_low}")
+        is_match, sim = auth._compare_landmarks(landmarks1, landmarks1)
+        assert is_match == True
+        assert sim > 0.99
+        print(f"Normalized self-similarity: {sim:.4f}")
 
 
 class TestReferenceImage:

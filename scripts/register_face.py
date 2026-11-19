@@ -12,7 +12,7 @@ def main():
     print("==============================================")
     print("[CAMERA] Smarty Face Registration Utility")
     print("==============================================")
-    print("Make sure A.D.A or any other camera app is closed before running this.")
+    print("Make sure Smarty or any other camera app is closed before running this.")
     print("Press SPACE to capture your face photo.")
     print("Press ESC to cancel.")
     print("----------------------------------------------")

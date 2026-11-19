@@ -6,14 +6,14 @@ sys.path.insert(0, os.path.join(os.getcwd(), 'backend'))
 
 from system_tools import speak_text
 
-print("🤖 Testing JARVIS Voice (Edge TTS - en-GB-RyanNeural)...")
+print("🤖 Testing Smarty Voice (Edge TTS - en-GB-RyanNeural)...")
 print("=" * 50)
 
-# Classic JARVIS lines from the MCU
+# Classic Smarty lines
 test_lines = [
     "Good evening, Sir. All systems are online and functioning normally.",
     "I've run a complete diagnostic. Everything appears to be in order.",
-    "Shall I prepare the suit, Sir?",
+    "Shall I prepare the project, Sir?",
 ]
 
 for i, line in enumerate(test_lines, 1):
@@ -26,4 +26,4 @@ for i, line in enumerate(test_lines, 1):
     time.sleep(5)
 
 print("\n" + "=" * 50)
-print("✅ JARVIS voice test complete.")
+print("✅ Smarty voice test complete.")

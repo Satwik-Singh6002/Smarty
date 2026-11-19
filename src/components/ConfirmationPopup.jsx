@@ -75,4 +75,4 @@ const ConfirmationPopup = ({ request, onConfirm, onDeny }) => {
     );
 };
 
-export default ConfirmationPopup;
+export default React.memo(ConfirmationPopup);

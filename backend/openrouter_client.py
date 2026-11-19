@@ -25,7 +25,7 @@ class OpenRouterClient:
     
     def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None):
         self.api_key = api_key or os.getenv("OPENROUTER_API_KEY")
-        self.model = model or os.getenv("OPENROUTER_MODEL", "z-ai/glm-4.5-air:free")
+        self.model = model or os.getenv("OPENROUTER_MODEL", "openrouter/free")
         
         if not self.api_key:
             raise ValueError("OPENROUTER_API_KEY not found. Set it in .env or pass it directly.")
@@ -128,15 +128,16 @@ class OpenRouterClient:
             
         # Preferred models ranked by tool compatibility and quality
         preferred_ranking = [
-            "z-ai/glm-4.5-air:free",
-            "google/gemma-4-26b-a4b-it:free",
+            "openrouter/free",
             "google/gemma-4-31b-it:free",
+            "google/gemma-4-26b-a4b-it:free",
             "meta-llama/llama-3.3-70b-instruct:free",
+            "nvidia/nemotron-3.5-super-vl:free",
+            "nvidia/nemotron-3.5-lightning:free",
             "deepseek/deepseek-v4-flash:free",
             "qwen/qwen3-coder:free",
             "meta-llama/llama-3.2-3b-instruct:free",
-            "nousresearch/hermes-3-llama-3.1-405b:free",
-            "openrouter/free"
+            "nousresearch/hermes-3-llama-3.1-405b:free"
         ]
         
         # Filter out all previously failed models

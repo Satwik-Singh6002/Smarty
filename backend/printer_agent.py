@@ -857,6 +857,10 @@ class PrinterAgent:
             return await self._status_moonraker(printer)
         else:
             return None
+
+    # Alias for compatibility with text_chat_loop
+    async def get_status(self, target: str) -> Optional[PrintStatus]:
+        return await self.get_print_status(target)
             
     async def _status_octoprint(self, printer: Printer) -> Optional[PrintStatus]:
         """Get status from OctoPrint."""

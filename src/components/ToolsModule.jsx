@@ -1,6 +1,25 @@
 import React from 'react';
 import { Mic, MicOff, Settings, Power, Video, VideoOff, Hand, Lightbulb, Printer, Globe, Box } from 'lucide-react';
 
+const ToolButton = ({ onClick, isActive, disabled, activeClass, label, children }) => (
+    <div className="tooltip-wrapper">
+        <button
+            onClick={onClick}
+            disabled={disabled}
+            className={`p-3 rounded-full border-2 transition-all duration-300 active:scale-90 ${
+                disabled
+                    ? 'border-gray-800 text-gray-800 cursor-not-allowed'
+                    : isActive
+                        ? activeClass
+                        : 'border-cyan-900 text-cyan-700 hover:border-cyan-500 hover:text-cyan-500'
+            }`}
+        >
+            {children}
+        </button>
+        <span className="tooltip-text">{label}</span>
+    </div>
+);
+
 const ToolsModule = ({
     isConnected,
     isMuted,
@@ -31,7 +50,7 @@ const ToolsModule = ({
             id="tools"
             onMouseDown={onMouseDown}
             className={`absolute px-6 py-3 transition-all duration-200 
-                        backdrop-blur-xl bg-black/40 border border-white/10 shadow-2xl rounded-full`}
+                        glass rounded-full`}
             style={{
                 left: position.x,
                 top: position.y,
@@ -41,109 +60,103 @@ const ToolsModule = ({
         >
             <div className="absolute inset-0 bg-[url('/noise.svg')] opacity-5 pointer-events-none mix-blend-overlay rounded-full"></div>
 
-            <div className="flex justify-center gap-6 relative z-10">
+            <div className="flex justify-center gap-5 relative z-10">
                 {/* Power Button */}
-                <button
+                <ToolButton
                     onClick={onTogglePower}
-                    className={`p-3 rounded-full border-2 transition-all duration-300 ${isConnected
-                        ? 'border-green-500 bg-green-500/10 text-green-500 hover:bg-green-500/20 shadow-[0_0_15px_rgba(34,197,94,0.3)]'
-                        : 'border-gray-600 bg-gray-600/10 text-gray-500 hover:bg-gray-600/20'
-                        } `}
+                    isActive={isConnected}
+                    activeClass="border-green-500 bg-green-500/10 text-green-500 hover:bg-green-500/20 shadow-[0_0_15px_rgba(34,197,94,0.3)]"
+                    label={isConnected ? 'Disconnect' : 'Connect'}
                 >
-                    <Power size={24} />
-                </button>
+                    <Power size={22} />
+                </ToolButton>
 
                 {/* Mute Button */}
-                <button
+                <ToolButton
                     onClick={onToggleMute}
                     disabled={!isConnected}
-                    className={`p-3 rounded-full border-2 transition-all duration-300 ${!isConnected
-                        ? 'border-gray-800 text-gray-800 cursor-not-allowed'
-                        : isMuted
-                            ? 'border-red-500 bg-red-500/10 text-red-500 hover:bg-red-500/20 shadow-[0_0_15px_rgba(239,68,68,0.3)]'
-                            : 'border-cyan-500 bg-cyan-500/10 text-cyan-500 hover:bg-cyan-500/20 shadow-[0_0_15px_rgba(6,182,212,0.3)]'
-                        } `}
+                    isActive={isConnected && !isMuted}
+                    activeClass={isMuted
+                        ? 'border-red-500 bg-red-500/10 text-red-500 hover:bg-red-500/20 shadow-[0_0_15px_rgba(239,68,68,0.3)]'
+                        : 'border-cyan-500 bg-cyan-500/10 text-cyan-500 hover:bg-cyan-500/20 shadow-[0_0_15px_rgba(6,182,212,0.3)]'
+                    }
+                    label={isMuted ? 'Unmute (Ctrl+M)' : 'Mute (Ctrl+M)'}
                 >
-                    {isMuted ? <MicOff size={24} /> : <Mic size={24} />}
-                </button>
+                    {isMuted ? <MicOff size={22} /> : <Mic size={22} />}
+                </ToolButton>
 
                 {/* Video Button */}
-                <button
+                <ToolButton
                     onClick={onToggleVideo}
-                    className={`p-3 rounded-full border-2 transition-all duration-300 ${isVideoOn
-                        ? 'border-purple-500 bg-purple-500/10 text-purple-500 hover:bg-purple-500/20 shadow-[0_0_15px_rgba(168,85,247,0.3)]'
-                        : 'border-cyan-900 text-cyan-700 hover:border-cyan-500 hover:text-cyan-500'
-                        } `}
+                    isActive={isVideoOn}
+                    activeClass="border-purple-500 bg-purple-500/10 text-purple-500 hover:bg-purple-500/20 shadow-[0_0_15px_rgba(168,85,247,0.3)]"
+                    label={isVideoOn ? 'Stop Camera' : 'Start Camera'}
                 >
-                    {isVideoOn ? <Video size={24} /> : <VideoOff size={24} />}
-                </button>
+                    {isVideoOn ? <Video size={22} /> : <VideoOff size={22} />}
+                </ToolButton>
 
                 {/* Settings Button */}
-                <button
+                <ToolButton
                     onClick={onToggleSettings}
-                    className={`p-3 rounded-full border-2 transition-all ${showSettings ? 'border-cyan-400 text-cyan-400 bg-cyan-900/20' : 'border-cyan-900 text-cyan-700 hover:border-cyan-500 hover:text-cyan-500'
-                        } `}
+                    isActive={showSettings}
+                    activeClass="border-cyan-400 text-cyan-400 bg-cyan-900/20"
+                    label="Settings (Esc to close)"
                 >
-                    <Settings size={24} />
-                </button>
+                    <Settings size={22} />
+                </ToolButton>
 
                 {/* Hand Tracking Toggle */}
-                <button
+                <ToolButton
                     onClick={onToggleHand}
-                    className={`p-3 rounded-full border-2 transition-all duration-300 ${isHandTrackingEnabled
-                        ? 'border-orange-500 bg-orange-500/10 text-orange-500 hover:bg-orange-500/20 shadow-[0_0_15px_rgba(249,115,22,0.3)]'
-                        : 'border-cyan-900 text-cyan-700 hover:border-cyan-500 hover:text-cyan-500'
-                        } `}
+                    isActive={isHandTrackingEnabled}
+                    activeClass="border-orange-500 bg-orange-500/10 text-orange-500 hover:bg-orange-500/20 shadow-[0_0_15px_rgba(249,115,22,0.3)]"
+                    label="Gesture Control"
                 >
-                    <Hand size={24} />
-                </button>
+                    <Hand size={22} />
+                </ToolButton>
 
                 {/* Kasa Light Control */}
-                <button
+                <ToolButton
                     onClick={onToggleKasa}
-                    className={`p-3 rounded-full border-2 transition-all duration-300 ${showKasaWindow
-                        ? 'border-yellow-300 bg-yellow-300/10 text-yellow-300 hover:bg-yellow-300/20 shadow-[0_0_15px_rgba(253,224,71,0.3)]'
-                        : 'border-cyan-900 text-cyan-700 hover:border-cyan-500 hover:text-cyan-500'
-                        } `}
+                    isActive={showKasaWindow}
+                    activeClass="border-yellow-300 bg-yellow-300/10 text-yellow-300 hover:bg-yellow-300/20 shadow-[0_0_15px_rgba(253,224,71,0.3)]"
+                    label="Smart Home"
                 >
-                    <Lightbulb size={24} />
-                </button>
+                    <Lightbulb size={22} />
+                </ToolButton>
 
                 {/* 3D Printer Control */}
-                <button
+                <ToolButton
                     onClick={onTogglePrinter}
-                    className={`p-3 rounded-full border-2 transition-all duration-300 ${showPrinterWindow
-                        ? 'border-green-400 bg-green-400/10 text-green-400 hover:bg-green-400/20'
-                        : 'border-cyan-900 text-cyan-700 hover:border-green-500 hover:text-green-500'
-                        } `}
+                    isActive={showPrinterWindow}
+                    activeClass="border-green-400 bg-green-400/10 text-green-400 hover:bg-green-400/20"
+                    label="3D Printer"
                 >
-                    <Printer size={24} />
-                </button>
+                    <Printer size={22} />
+                </ToolButton>
 
                 {/* CAD Agent Toggle */}
-                <button
+                <ToolButton
                     onClick={onToggleCad}
-                    className={`p-3 rounded-full border-2 transition-all duration-300 ${showCadWindow
-                        ? 'border-cyan-400 bg-cyan-400/10 text-cyan-400 hover:bg-cyan-400/20 shadow-[0_0_15px_rgba(34,211,238,0.3)]'
-                        : 'border-cyan-900 text-cyan-700 hover:border-cyan-500 hover:text-cyan-500'
-                        } `}
+                    isActive={showCadWindow}
+                    activeClass="border-cyan-400 bg-cyan-400/10 text-cyan-400 hover:bg-cyan-400/20 shadow-[0_0_15px_rgba(34,211,238,0.3)]"
+                    label="CAD Generator"
                 >
-                    <Box size={24} />
-                </button>
+                    <Box size={22} />
+                </ToolButton>
 
                 {/* Web Agent Toggle */}
-                <button
+                <ToolButton
                     onClick={onToggleBrowser}
-                    className={`p-3 rounded-full border-2 transition-all duration-300 ${showBrowserWindow
-                        ? 'border-blue-400 bg-blue-400/10 text-blue-400 hover:bg-blue-400/20 shadow-[0_0_15px_rgba(96,165,250,0.3)]'
-                        : 'border-cyan-900 text-cyan-700 hover:border-blue-500 hover:text-blue-500'
-                        } `}
+                    isActive={showBrowserWindow}
+                    activeClass="border-blue-400 bg-blue-400/10 text-blue-400 hover:bg-blue-400/20 shadow-[0_0_15px_rgba(96,165,250,0.3)]"
+                    label="Web Agent"
                 >
-                    <Globe size={24} />
-                </button>
+                    <Globe size={22} />
+                </ToolButton>
             </div>
         </div>
     );
 };
 
-export default ToolsModule;
+export default React.memo(ToolsModule);

@@ -183,7 +183,7 @@ const Visualizer = ({ audioData, isListening, intensity = 0, width = 600, height
                     className={`font-bold tracking-widest ${overloadActive ? 'text-red-400 font-black' : 'text-cyan-100 drop-shadow-[0_0_15px_rgba(34,211,238,0.8)]'}`}
                     style={{ fontSize: Math.min(width, height) * (overloadActive ? 0.07 : 0.1) }}
                 >
-                    {overloadActive ? (Math.random() > 0.88 ? "TEMP 99%" : (Math.random() > 0.88 ? "CRITICAL" : "OVERLOAD")) : "A.D.A"}
+                    {overloadActive ? (Math.random() > 0.88 ? "TEMP 99%" : (Math.random() > 0.88 ? "CRITICAL" : "OVERLOAD")) : "SMARTY"}
                 </motion.div>
             </div>
 

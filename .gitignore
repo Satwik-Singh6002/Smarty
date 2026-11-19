@@ -10,8 +10,28 @@ env/
 .env.production.local
 dist/
 build/
+release/
 .pytest_cache/
 __pycache__/
 *.py[cod]
 *$py.class
 .DS_Store
+
+# Logs
+*.log
+server_startup.log
+
+# User data (should not be committed)
+projects/
+long_term_memory/
+printer_profiles/
+
+# Large binary files & biometrics
+*.task
+*.npy
+*.mp3
+backend/reference.jpg
+backend/reference_landmarks.npy
+
+# Test images
+obama.jpg

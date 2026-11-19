@@ -1,6 +1,8 @@
-const { app, BrowserWindow, ipcMain } = require('electron');
+const { app, BrowserWindow, ipcMain, shell } = require('electron');
 const path = require('path');
 const { spawn } = require('child_process');
+
+process.env.ELECTRON_DISABLE_SECURITY_WARNINGS = 'true';
 
 // Use ANGLE D3D11 backend - more stable on Windows while keeping WebGL working
 // This fixes "GPU state invalid after WaitForGetOffsetInRange" error
@@ -16,12 +18,14 @@ function createWindow() {
         width: 1920,
         height: 1080,
         webPreferences: {
-            nodeIntegration: true,
-            contextIsolation: false, // For simple IPC/Socket.IO usage
+            nodeIntegration: false,
+            contextIsolation: true,
+            preload: path.join(__dirname, 'preload.js'),
         },
         backgroundColor: '#000000',
         frame: false, // Frameless for custom UI
         titleBarStyle: 'hidden',
+        title: 'Smarty',
         show: false, // Don't show until ready
     });
 
@@ -99,7 +103,7 @@ function startPythonBackend() {
 
     pythonProcess = spawn(pythonExecutable, ['-u', scriptPath], {
         cwd: path.join(__dirname, '../backend'),
-        shell: true
+        shell: false
     });
 
     pythonProcess.stdout.on('data', (data) => {
@@ -124,6 +128,7 @@ function startPythonBackend() {
 }
 
 app.whenReady().then(() => {
+    // IPC Handlers — window controls
     ipcMain.on('window-minimize', () => {
         if (mainWindow) mainWindow.minimize();
     });
@@ -140,6 +145,16 @@ app.whenReady().then(() => {
 
     ipcMain.on('window-close', () => {
         if (mainWindow) mainWindow.close();
+    });
+
+    // IPC Handler — app version
+    ipcMain.handle('get-app-version', () => {
+        return app.getVersion();
+    });
+
+    // IPC Handler — open external url
+    ipcMain.on('open-external', (event, url) => {
+        shell.openExternal(url);
     });
 
     checkBackendPort(8000).then((isTaken) => {

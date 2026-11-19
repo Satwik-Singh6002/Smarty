@@ -199,4 +199,4 @@ const KasaWindow = ({
     );
 };
 
-export default KasaWindow;
+export default React.memo(KasaWindow);

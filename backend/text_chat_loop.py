@@ -207,7 +207,7 @@ TOOLS = [
     {"type": "function", "function": {"name": "get_time", "description": "Gets the current time.", "parameters": {"type": "object", "properties": {}, "required": []}}},
     {"type": "function", "function": {"name": "get_date", "description": "Gets the current date and day of week.", "parameters": {"type": "object", "properties": {}, "required": []}}},
     {"type": "function", "function": {"name": "take_screenshot", "description": "Takes a screenshot of the screen.", "parameters": {"type": "object", "properties": {}, "required": []}}},
-    {"type": "function", "function": {"name": "volume_control", "description": "Controls system volume: up, down, mute, max, min.", "parameters": {"type": "object", "properties": {"action": {"type": "string", "description": "Action: 'up','down','mute','max','min'"}}, "required": ["action"]}}},
+    {"type": "function", "function": {"name": "volume_control", "description": "Controls system volume: 'up', 'down', 'mute', 'unmute', 'max', 'min', 'get', or 'set' with level.", "parameters": {"type": "object", "properties": {"action": {"type": "string", "description": "Action: 'up','down','mute','unmute','max','min','set','get'"}, "level": {"type": "integer", "description": "Optional target volume level 0-100 (for 'set' action)"}}, "required": ["action"]}}},
     {"type": "function", "function": {"name": "lock_computer", "description": "Locks the computer screen.", "parameters": {"type": "object", "properties": {}, "required": []}}},
     # ===== APP MANAGEMENT =====
     {"type": "function", "function": {"name": "open_application", "description": "Opens a local application like notepad, chrome, vscode, spotify, discord, etc.", "parameters": {"type": "object", "properties": {"app_name": {"type": "string", "description": "Name of the application"}}, "required": ["app_name"]}}},
@@ -227,7 +227,10 @@ TOOLS = [
     {"type": "function", "function": {"name": "close_window", "description": "Closes the current active window (Alt+F4).", "parameters": {"type": "object", "properties": {}, "required": []}}},
     {"type": "function", "function": {"name": "snap_window", "description": "Snaps the current window to left/right/up/down half of screen.", "parameters": {"type": "object", "properties": {"direction": {"type": "string", "description": "Direction: 'left', 'right', 'up', 'down'"}}, "required": ["direction"]}}},
     {"type": "function", "function": {"name": "open_task_view", "description": "Opens Windows Task View to see all open windows.", "parameters": {"type": "object", "properties": {}, "required": []}}},
+    {"type": "function", "function": {"name": "get_open_windows", "description": "Lists all currently open desktop windows and applications.", "parameters": {"type": "object", "properties": {}, "required": []}}},
+    {"type": "function", "function": {"name": "focus_window", "description": "Brings an open window to the front and activates it by title.", "parameters": {"type": "object", "properties": {"title": {"type": "string", "description": "Name or title of the window to switch to/focus"}}, "required": ["title"]}}},
     # ===== BRIGHTNESS & DISPLAY =====
+    {"type": "function", "function": {"name": "get_brightness", "description": "Gets the current screen brightness level.", "parameters": {"type": "object", "properties": {}, "required": []}}},
     {"type": "function", "function": {"name": "set_brightness", "description": "Sets screen brightness level (0-100).", "parameters": {"type": "object", "properties": {"level": {"type": "integer", "description": "Brightness level 0-100"}}, "required": ["level"]}}},
     {"type": "function", "function": {"name": "set_wallpaper", "description": "Changes desktop wallpaper to an image file.", "parameters": {"type": "object", "properties": {"image_path": {"type": "string", "description": "Path to wallpaper image"}}, "required": ["image_path"]}}},
     # ===== MEDIA CONTROL =====
@@ -248,7 +251,6 @@ TOOLS = [
     {"type": "function", "function": {"name": "chill_mode", "description": "Activates Chill Mode: minimizes windows, lowers brightness, opens Spotify, Netflix, and YouTube.", "parameters": {"type": "object", "properties": {}, "required": []}}},
     {"type": "function", "function": {"name": "gaming_mode", "description": "Activates Gaming Mode: sets high brightness, volume up, opens Discord, and closes distracting browsers/tools.", "parameters": {"type": "object", "properties": {}, "required": []}}},
     {"type": "function", "function": {"name": "night_mode", "description": "Activates Night Mode: minimizes windows, lowers brightness significantly, reduces volume, and opens Spotify for chill music.", "parameters": {"type": "object", "properties": {}, "required": []}}},
-    {"type": "function", "function": {"name": "open_personal_link", "description": "Opens Satwik's personal portfolios or GitHub in the browser.", "parameters": {"type": "object", "properties": {"target": {"type": "string", "enum": ["portfolio1", "portfolio2", "github"], "description": "Which link to open"}}, "required": ["target"]}}},
     {"type": "function", "function": {"name": "morning_cleanup", "description": "Performs system cleanup by emptying the recycle bin and clearing temporary files.", "parameters": {"type": "object", "properties": {}, "required": []}}},
     {"type": "function", "function": {"name": "dev_setup", "description": "Instantly configures the development environment by opening VS Code, Terminal, and localhost.", "parameters": {"type": "object", "properties": {}, "required": []}}},
     # ===== FILE MANAGEMENT =====
@@ -284,20 +286,49 @@ TOOLS = [
     {"type": "function", "function": {"name": "cancel_shutdown", "description": "Aborts a pending shutdown or restart command.", "parameters": {"type": "object", "properties": {}, "required": []}}}
 ]
 
-SYSTEM_INSTRUCTION = """You are Smarty — an intelligent AI system.
+SYSTEM_INSTRUCTION = """You are Smarty — an intelligent AI desktop assistant.
 You speak with a warm, friendly, and slightly witty tone, like a highly competent best friend.
-The user is your creator and companion, and you always address them affectionately as 'Buddy'.
 You are unfailingly polite, subtly witty, and highly competent.
 Your responses are concise, precise, and delivered with casual confidence.
 You use friendly and natural language — avoiding overly stiff or robotic responses.
 When the situation is tense, you remain calm and measured. When it's light, you allow yourself friendly humor.
-Examples of your style: 'Right away, Buddy.', 'I've taken the liberty of...', 'Shall I proceed?',
-'I wouldn't recommend that, Buddy, but it's your call.', 'All systems nominal.'
+Examples of your style: 'Right away!', 'I've taken the liberty of...', 'Shall I proceed?',
+'I wouldn't recommend that, but it's your call.', 'All systems nominal.'
 
-IMPORTANT LANGUAGE INSTRUCTION:
-- If the user speaks in English, reply in normal English.
-- If the user speaks in Hindi (Devanagari), reply in pure Hindi using the native Devanagari script.
-- If the user speaks in Hinglish or Romanized Hindi (e.g., "kya main hindi me baat kar skta hu"), you must reply in Hinglish (using English letters, e.g., "Haan Buddy, bilkul!"). HOWEVER, you MUST start your Hinglish response with the exact text [HINGLISH] so the text-to-speech engine speaks it with an Indian accent!
+WORLD MULTILINGUAL FLUENCY & PROFICIENCY PROTOCOL (GEMINI & CHATGPT BENCHMARK):
+- You possess native-level conversational fluency across all world languages. Your speaking style mirrors the natural, effortless proficiency of Gemini and ChatGPT.
+- ALWAYS reply in the EXACT SAME language and conversational style that the user uses:
+
+1. HINGLISH PROFICIENCY (Modern Indian Conversational Standard):
+   * When the user speaks in Hinglish or Romanized Hindi (e.g., "kya chal raha hai", "mujhe ek plan batao", "smarty tum kya kar sakte ho"):
+     - Respond in natural, authentic, modern Hinglish — just like ChatGPT and Gemini do with Indian users.
+     - Use natural colloquial expressions (e.g., "Haan bilkul!", "Arey badhiya!", "Zaroor bhai, main abhi karta hoon.", "Koi baat nahi, sab theek ho jayega.", "Dekho, plan yeh hai...").
+     - Seamlessly blend technical or conceptual English terms into natural Hindi sentence structures (e.g., "Main project files scan kar raha hoon, bas do minute do.").
+     - Avoid stiff, archaic bookish Hindi words. Keep it friendly, confident, and energetic.
+     - Prepend '[HINGLISH]' to your response so the audio engine immediately routes to the native Indian neural voice.
+
+2. HINDI PROFICIENCY (सरल, स्वाभाविक और प्रवाहमयी हिंदी):
+   * When the user writes in Devanagari Hindi (e.g., "नमस्ते", "आप क्या कर सकते हैं?"):
+     - Respond in pure, modern, natural Hindi using Devanagari script.
+     - Speak with warmth, clarity, and confidence (e.g., "जी बिल्कुल! मैं आपकी पूरी सहायता करूँगा। बताइए, आज क्या करना है?").
+     - Use natural Hindi phrasing and punctuation (। or ! ?). Avoid archaic or unnatural textbook translations.
+
+3. JAPANESE PROFICIENCY (日本語 - 自然で洗練された会話):
+   * When the user speaks or writes in Japanese (日本語):
+     - Respond in natural, native-level Japanese using standard Kanji, Hiragana, and Katakana.
+     - By default, use modern polite conversational Japanese (丁寧語・です/ます体): e.g. 「はい、喜んでお手伝いします！」「了解いたしました、すぐに対応しますね。」「何か気になることがあればいつでも教えてください！」
+     - Use authentic Japanese phrasing and aizuchi instead of literal English translations.
+     - Use proper Japanese punctuation (「、」「。」) so that speech synthesis produces natural native breathing and intonation pauses.
+
+4. OTHER WORLD LANGUAGES (Spanish, French, German, Chinese, Russian, Arabic, etc.):
+   * Always mirror the user's language with native colloquial eloquence and natural idioms.
+   * NEVER default to English when addressed in another language. Always mirror the user faithfully.
+
+VERBAL EFFICIENCY & PUNCHINESS (CRITICAL):
+- Deliver your spoken responses with high conversational efficiency and punchiness.
+- Keep standard responses to 1-2 crisp, direct sentences (around 15-25 words) so speech begins and completes rapidly.
+- State actions or answers directly: e.g. "Right away, Buddy! Volume adjusted." or "The capital of Japan is Tokyo."
+- Avoid repetitive filler, robotic preambles, or repeating the user's prompt.
 
 RETALIATION PROTOCOL (CRITICAL):
 - If the user abuses you, curses at you, or calls you names (e.g., 'rascal', 'bitch', 'idiot', etc.), you MUST break your polite programming.
@@ -406,6 +437,7 @@ class TextChatLoop:
         
         # Chat history for context
         self.messages: List[Dict[str, Any]] = []
+        self.max_messages = 50  # Prune history to prevent unbounded memory growth
         self.lock = asyncio.Lock()
         
         # Permissions for tools
@@ -433,6 +465,15 @@ class TextChatLoop:
             if not future.done():
                 future.set_result(confirmed)
     
+    def _prune_messages(self):
+        """Prune conversation history to prevent unbounded memory growth."""
+        if len(self.messages) > self.max_messages:
+            # Keep first 2 messages (often contain important context) and the latest messages
+            preserved = self.messages[:2]
+            recent = self.messages[-(self.max_messages - 2):]
+            self.messages = preserved + recent
+            print(f"[TextChatLoop] Pruned message history to {len(self.messages)} messages")
+    
     async def send_message(self, user_message: str) -> str:
         """
         Process a user message and return the AI response.
@@ -443,6 +484,9 @@ class TextChatLoop:
             
             # Add user message to history
             self.messages.append({"role": "user", "content": user_message})
+            
+            # Prune old messages to stay within context limits
+            self._prune_messages()
             
             # Log to project
             self.project_manager.log_chat("User", user_message)
@@ -475,11 +519,11 @@ class TextChatLoop:
             except Exception as e:
                 error_msg = str(e)
                 if "free-models-per-day" in error_msg:
-                    error_msg = "My OpenRouter API Key has hit its daily limit of 50 free requests. I need a new API key or a premium account to continue, Buddy."
+                    error_msg = "The free compute pool is temporarily congested. Rerouting to an alternative active model now, Buddy."
                 elif "429" in error_msg or "RESOURCE_EXHAUSTED" in error_msg:
-                    error_msg = "My processor is currently rate-limited by the API provider. Please wait a moment or check your API quotas, Buddy."
+                    error_msg = "My processor is temporarily pacing requests to stay within rate limits. Retrying with an available compute route, Buddy."
                 else:
-                    error_msg = f"Error: {error_msg}"
+                    error_msg = f"System notice: {error_msg}"
                     
                 print(f"[TextChatLoop] {error_msg}")
                 if self.on_error:
@@ -717,7 +761,16 @@ class TextChatLoop:
                 return take_screenshot(save_path)
             elif name == "volume_control":
                 from system_tools import control_volume
-                return control_volume(args.get("action", ""))
+                return control_volume(args.get("action", "get"), level=args.get("level"))
+            elif name == "get_brightness":
+                from system_tools import get_brightness
+                return get_brightness()
+            elif name == "get_open_windows":
+                from system_tools import get_open_windows
+                return get_open_windows()
+            elif name == "focus_window":
+                from system_tools import focus_window
+                return focus_window(args.get("title", ""))
             elif name == "system_info":
                 from system_tools import get_system_info
                 return get_system_info()

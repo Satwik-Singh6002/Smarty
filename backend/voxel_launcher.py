@@ -1,5 +1,5 @@
 """
-Voxel System Launcher for A.D.A / Smarty AI Assistant
+Voxel System Launcher for Smarty AI Assistant
 Ported from old Smarty server.py and web_launcher.py
 """
 import os

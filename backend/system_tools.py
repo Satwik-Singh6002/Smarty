@@ -5,6 +5,14 @@ power, keyboard, mouse, windows, battery, wallpaper, and more.
 """
 import os
 import sys
+
+# Force stdout/stderr to UTF-8 to prevent UnicodeEncodeError in console output on Windows
+if sys.platform == 'win32':
+    try:
+        sys.stdout.reconfigure(encoding='utf-8')
+        sys.stderr.reconfigure(encoding='utf-8')
+    except Exception:
+        pass
 import subprocess
 import datetime
 import ctypes
@@ -35,6 +43,30 @@ try:
 except ImportError:
     PYPERCLIP_AVAILABLE = False
 
+try:
+    import mss
+    MSS_AVAILABLE = True
+except ImportError:
+    MSS_AVAILABLE = False
+
+try:
+    import screen_brightness_control as sbc
+    SBC_AVAILABLE = True
+except ImportError:
+    SBC_AVAILABLE = False
+
+try:
+    from pycaw.pycaw import AudioUtilities
+    PYCAW_AVAILABLE = True
+except Exception:
+    PYCAW_AVAILABLE = False
+
+try:
+    import pygetwindow as gw
+    PYGETWINDOW_AVAILABLE = True
+except ImportError:
+    PYGETWINDOW_AVAILABLE = False
+
 
 # ═══════════════════════════════════════════
 #  TIME & DATE
@@ -55,25 +87,59 @@ def get_current_date() -> Dict[str, Any]:
 # ═══════════════════════════════════════════
 
 def take_screenshot(save_path: Optional[str] = None) -> Dict[str, Any]:
-    if not PYAUTOGUI_AVAILABLE:
-        return {"success": False, "error": "pyautogui not installed"}
-    try:
-        ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = save_path or f"screenshot_{ts}.png"
-        pyautogui.screenshot().save(filename)
-        return {"success": True, "file_path": os.path.abspath(filename), "message": f"Screenshot saved as {filename}"}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
+    """Takes a screenshot using high-speed mss with PyAutoGUI fallback."""
+    ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = save_path or f"screenshot_{ts}.png"
+    abs_path = os.path.abspath(filename)
+    if os.path.dirname(abs_path):
+        os.makedirs(os.path.dirname(abs_path), exist_ok=True)
+
+    if MSS_AVAILABLE:
+        try:
+            with mss.mss() as sct:
+                # Capture primary monitor or entire virtual desktop
+                sct.shot(mon=-1, output=abs_path)
+            return {"success": True, "file_path": abs_path, "message": f"Screenshot saved as {os.path.basename(abs_path)}"}
+        except Exception as e:
+            print(f"[Screenshot] mss failed ({e}), falling back to PyAutoGUI...")
+
+    if PYAUTOGUI_AVAILABLE:
+        try:
+            pyautogui.screenshot().save(abs_path)
+            return {"success": True, "file_path": abs_path, "message": f"Screenshot saved as {os.path.basename(abs_path)}"}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    return {"success": False, "error": "No screenshot engine available (mss/pyautogui missing)"}
+
+def get_brightness() -> Dict[str, Any]:
+    """Gets current screen brightness percentage using screen_brightness_control."""
+    if SBC_AVAILABLE:
+        try:
+            b = sbc.get_brightness()
+            current = b[0] if isinstance(b, list) and b else b
+            return {"success": True, "level": current, "message": f"Current screen brightness is {current}%"}
+        except Exception as e:
+            pass
+    return {"success": False, "error": "Unable to read brightness"}
 
 def set_brightness(level: int) -> Dict[str, Any]:
+    """Sets screen brightness (0-100%) using native screen_brightness_control with WMI fallback."""
     try:
-        level = max(0, min(100, level))
+        level = max(0, min(100, int(level)))
+        if SBC_AVAILABLE:
+            try:
+                sbc.set_brightness(level)
+                return {"success": True, "level": level, "message": f"Brightness set to {level}%"}
+            except Exception as e:
+                print(f"[Brightness] screen_brightness_control fallback: {e}")
+
         subprocess.run(
             ["powershell", "-Command",
              f"(Get-WmiObject -Namespace root/WMI -Class WmiMonitorBrightnessMethods).WmiSetBrightness(1,{level})"],
             capture_output=True, text=True, timeout=10
         )
-        return {"success": True, "message": f"Brightness set to {level}%"}
+        return {"success": True, "level": level, "message": f"Brightness set to {level}%"}
     except Exception as e:
         return {"success": False, "error": str(e)}
 
@@ -82,30 +148,95 @@ def set_brightness(level: int) -> Dict[str, Any]:
 #  VOLUME CONTROL
 # ═══════════════════════════════════════════
 
-def control_volume(action: str) -> Dict[str, Any]:
-    if not PYAUTOGUI_AVAILABLE:
-        return {"success": False, "error": "pyautogui not installed"}
-    try:
-        action = action.lower().strip()
-        if action == "up":
-            for _ in range(5): pyautogui.press("volumeup")
-            return {"success": True, "message": "Volume increased"}
-        elif action == "down":
-            for _ in range(5): pyautogui.press("volumedown")
-            return {"success": True, "message": "Volume decreased"}
-        elif action == "mute":
-            pyautogui.press("volumemute")
-            return {"success": True, "message": "Volume muted/unmuted"}
-        elif action == "max":
-            for _ in range(50): pyautogui.press("volumeup")
-            return {"success": True, "message": "Volume set to maximum"}
-        elif action == "min":
-            for _ in range(50): pyautogui.press("volumedown")
-            return {"success": True, "message": "Volume set to minimum"}
-        else:
-            return {"success": False, "error": f"Unknown action: {action}"}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
+def control_volume(action: str, level: Optional[int] = None) -> Dict[str, Any]:
+    """
+    Advanced volume control via Windows Core Audio (WASAPI / Pycaw)
+    with PyAutoGUI fallback.
+    Actions: 'up', 'down', 'mute', 'unmute', 'max', 'min', 'set', 'get'
+    """
+    action = (action or "").lower().strip()
+
+    # Try Pycaw first for hardware-level precision
+    if PYCAW_AVAILABLE:
+        try:
+            device = AudioUtilities.GetSpeakers()
+            if device:
+                current_percent = round(device.volume_percent)
+                endpoint = device.EndpointVolume
+
+                if action in ("get", "status"):
+                    is_muted = bool(endpoint.GetMute())
+                    return {
+                        "success": True,
+                        "volume": current_percent,
+                        "muted": is_muted,
+                        "message": f"Master volume is at {current_percent}%{' (Muted)' if is_muted else ''}"
+                    }
+
+                elif action == "set" or level is not None:
+                    target_level = max(0, min(100, int(level if level is not None else 50)))
+                    endpoint.SetMasterVolumeLevelScalar(target_level / 100.0, None)
+                    return {"success": True, "volume": target_level, "message": f"Volume set to {target_level}%"}
+
+                elif action == "up":
+                    new_val = min(100, current_percent + 10)
+                    endpoint.SetMasterVolumeLevelScalar(new_val / 100.0, None)
+                    return {"success": True, "volume": new_val, "message": f"Volume increased to {new_val}%"}
+
+                elif action == "down":
+                    new_val = max(0, current_percent - 10)
+                    endpoint.SetMasterVolumeLevelScalar(new_val / 100.0, None)
+                    return {"success": True, "volume": new_val, "message": f"Volume decreased to {new_val}%"}
+
+                elif action == "mute":
+                    is_muted = bool(endpoint.GetMute())
+                    endpoint.SetMute(0 if is_muted else 1, None)
+                    return {"success": True, "muted": not is_muted, "message": "Volume unmuted" if is_muted else "Volume muted"}
+
+                elif action == "unmute":
+                    endpoint.SetMute(0, None)
+                    return {"success": True, "muted": False, "message": "Volume unmuted"}
+
+                elif action == "max":
+                    endpoint.SetMasterVolumeLevelScalar(1.0, None)
+                    return {"success": True, "volume": 100, "message": "Volume set to maximum (100%)"}
+
+                elif action == "min":
+                    endpoint.SetMasterVolumeLevelScalar(0.0, None)
+                    return {"success": True, "volume": 0, "message": "Volume set to minimum (0%)"}
+
+        except Exception as e:
+            print(f"[Volume] Pycaw audio endpoint error ({e}), falling back to PyAutoGUI...")
+
+    # Fallback to PyAutoGUI key simulation
+    if PYAUTOGUI_AVAILABLE:
+        try:
+            if action == "up":
+                for _ in range(5): pyautogui.press("volumeup")
+                return {"success": True, "message": "Volume increased"}
+            elif action == "down":
+                for _ in range(5): pyautogui.press("volumedown")
+                return {"success": True, "message": "Volume decreased"}
+            elif action == "mute":
+                pyautogui.press("volumemute")
+                return {"success": True, "message": "Volume muted/unmuted"}
+            elif action == "max":
+                for _ in range(50): pyautogui.press("volumeup")
+                return {"success": True, "message": "Volume set to maximum"}
+            elif action == "min":
+                for _ in range(50): pyautogui.press("volumedown")
+                return {"success": True, "message": "Volume set to minimum"}
+            elif action == "set" and level is not None:
+                for _ in range(50): pyautogui.press("volumedown")
+                steps = int(level / 2)
+                for _ in range(steps): pyautogui.press("volumeup")
+                return {"success": True, "message": f"Volume adjusted to ~{level}%"}
+            else:
+                return {"success": False, "error": f"Unknown action: {action}"}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    return {"success": False, "error": "Neither pycaw nor pyautogui available"}
 
 
 # ═══════════════════════════════════════════
@@ -523,6 +654,39 @@ def open_task_view() -> Dict[str, Any]:
     except Exception as e:
         return {"success": False, "error": str(e)}
 
+def get_open_windows() -> Dict[str, Any]:
+    """Lists currently open application windows using pygetwindow."""
+    if PYGETWINDOW_AVAILABLE:
+        try:
+            titles = [w.title.strip() for w in gw.getAllWindows() if w.title and w.title.strip()]
+            seen = set()
+            clean_titles = []
+            for t in titles:
+                if t not in seen and t not in ("Program Manager", "Settings", ""):
+                    seen.add(t)
+                    clean_titles.append(t)
+            return {"success": True, "windows": clean_titles, "count": len(clean_titles), "message": f"Open windows: {', '.join(clean_titles[:8])}"}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+    return {"success": False, "error": "pygetwindow not installed"}
+
+def focus_window(title: str) -> Dict[str, Any]:
+    """Brings a window matching the title query to the foreground using pygetwindow."""
+    if PYGETWINDOW_AVAILABLE:
+        try:
+            query = title.lower().strip()
+            matches = [w for w in gw.getAllWindows() if w.title and query in w.title.lower()]
+            if matches:
+                target = matches[0]
+                if target.isMinimized:
+                    target.restore()
+                target.activate()
+                return {"success": True, "title": target.title, "message": f"Brought '{target.title}' to foreground"}
+            return {"success": False, "error": f"No window found matching '{title}'"}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+    return {"success": False, "error": "pygetwindow not installed"}
+
 
 # ═══════════════════════════════════════════
 #  WIFI & NETWORK
@@ -777,99 +941,208 @@ def _speak_edge_tts(text: str, wait: bool = False) -> Dict[str, Any]:
     import threading
     import uuid
     import re
+    import io
 
     # Auto-detect language and set custom voice configurations
-    selected_voice = "en-GB-RyanNeural"  # Refined British male voice (J.A.R.V.I.S like)
-    selected_rate = "+8%"
-    selected_pitch = "-6Hz"
+    def is_hinglish_text(sample: str) -> bool:
+        """Detects Romanized Hindi (Hinglish) using linguistic vocabulary markers."""
+        if not sample:
+            return False
+        # If text has non-Latin scripts, it is handled by Unicode detectors
+        if re.search(r'[\u0900-\u097F\u3040-\u30FF\u4E00-\u9FFF\uAC00-\uD7AF\u0600-\u06FF\u0400-\u04FF]', sample):
+            return False
+        hinglish_words = {
+            "kya", "hai", "hain", "hoon", "hun", "ho", "bhai", "yaar", "batao", "bataiye", 
+            "kaise", "kaisa", "kaisi", "nahi", "nahin", "accha", "achha", "theek", "thik", 
+            "karo", "karein", "kar", "karna", "karne", "mera", "meri", "mere", "aap", "aapka", 
+            "aapke", "aapki", "tum", "tumhara", "tumhe", "hum", "humein", "yeh", "ye", "woh", 
+            "wo", "kuch", "kaam", "zaroor", "bilkul", "chalo", "lekin", "magar", "aur", "bhi", 
+            "toh", "to", "ab", "sab", "chal", "raha", "rahi", "rahe", "samajh", "dekho", 
+            "suno", "karunga", "karungi", "shuru", "madad", "chahiye", "bol", "bolo", "kripya",
+            "dost", "namaste", "dhanyawad", "shukriya", "matlab", "baat", "karni", "bolo",
+            "acha", "badiya", "badhiya", "fatafat", "jaldi", "abhi", "kabhi"
+        }
+        tokens = set(re.findall(r'\b[a-zA-Z]+\b', sample.lower()))
+        matches = tokens.intersection(hinglish_words)
+        return len(matches) >= 2 or (len(matches) >= 1 and len(tokens) <= 6)
 
-    force_hindi = False
-    if "[HINGLISH]" in text:
-        force_hindi = True
+    is_explicit_hinglish = "[HINGLISH]" in text
+    if is_explicit_hinglish:
         text = text.replace("[HINGLISH]", "").strip()
 
-    text_lower = text.lower()
-    
-    # 1. Native Script / Unicode Block Checks
-    if force_hindi or bool(re.search(r'[\u0900-\u097F]', text)):
-        # Hindi / Hinglish
-        selected_voice = "hi-IN-MadhurNeural"
-        selected_rate = "+5%"
-        selected_pitch = "+0Hz"
+    # Load custom English voice configuration from settings.json
+    custom_voice = "en-US-AvaMultilingualNeural"
+    custom_rate = "+12%"
+    custom_pitch = "-4Hz"
+    try:
+        settings_paths = [
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), "settings.json"),
+            os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "settings.json"),
+            "settings.json"
+        ]
+        settings_file = None
+        for p in settings_paths:
+            if os.path.exists(p):
+                settings_file = p
+                break
+        if settings_file:
+            with open(settings_file, "r") as f:
+                settings = json.load(f)
+                custom_voice = settings.get("smarty_voice", "en-US-AvaMultilingualNeural")
+                custom_rate = settings.get("smarty_rate", "+12%")
+                custom_pitch = settings.get("smarty_pitch", "-4Hz")
+    except Exception as e:
+        print(f"[Smarty TTS] Error loading voice settings: {e}")
+
+    # Define a comprehensive voice mapping for standard language codes with brisk, efficient rates
+    VOICE_MAP = {
+        # Default Smarty persona
+        "en": (custom_voice, custom_rate, custom_pitch),
+        # Native Hinglish (Romanized Hindi) using Microsoft's premier Indian neural voice
+        "hinglish": ("en-IN-PrabhatNeural", "+11%", "+0Hz"),
+        # Pure Hindi (Devanagari)
+        "hi": ("hi-IN-MadhurNeural", "+10%", "+0Hz"),
+        # Japanese (Nanami is Microsoft's most natural, highly expressive Japanese neural voice)
+        "ja": ("ja-JP-NanamiNeural", "+10%", "+0Hz"),
+        # Other supported languages with crisp, natural pacing (+10% to +15%)
+        "es": ("es-ES-AlvaroNeural", "+12%", "+0Hz"),       # Spanish
+        "fr": ("fr-FR-HenriNeural", "+10%", "+0Hz"),        # French
+        "de": ("de-DE-KillianNeural", "+10%", "+0Hz"),      # German
+        "it": ("it-IT-GianniNeural", "+10%", "+0Hz"),       # Italian
+        "pt": ("pt-BR-AntonioNeural", "+10%", "+0Hz"),      # Portuguese
+        "zh": ("zh-CN-YunxiNeural", "+12%", "+0Hz"),        # Chinese (Simplified)
+        "zh-cn": ("zh-CN-YunxiNeural", "+12%", "+0Hz"),     # Chinese (Simplified)
+        "zh-tw": ("zh-TW-HsiaoChenNeural", "+12%", "+0Hz"), # Chinese (Traditional)
+        "ru": ("ru-RU-DmitryNeural", "+10%", "+0Hz"),       # Russian
+        "ar": ("ar-SA-HamedNeural", "+10%", "+0Hz"),        # Arabic
+        "ko": ("ko-KR-InJoonNeural", "+12%", "+0Hz"),       # Korean
+        "tr": ("tr-TR-AhmetNeural", "+10%", "+0Hz"),        # Turkish
+        "nl": ("nl-NL-MaartenNeural", "+10%", "+0Hz"),      # Dutch
+        "pl": ("pl-PL-MarekNeural", "+10%", "+0Hz"),        # Polish
+        "sv": ("sv-SE-MattiasNeural", "+10%", "+0Hz"),      # Swedish
+        "da": ("da-DK-JeppeNeural", "+10%", "+0Hz"),        # Danish
+        "fi": ("fi-FI-HarriNeural", "+10%", "+0Hz"),        # Finnish
+        "no": ("no-NO-FinnNeural", "+10%", "+0Hz"),         # Norwegian
+        "cs": ("cs-CZ-AntoninNeural", "+10%", "+0Hz"),      # Czech
+        "el": ("el-GR-NestorasNeural", "+10%", "+0Hz"),     # Greek
+        "he": ("he-IL-AvriNeural", "+10%", "+0Hz"),         # Hebrew
+        "id": ("id-ID-ArdiNeural", "+10%", "+0Hz"),         # Indonesian
+        "ms": ("ms-MY-OsmanNeural", "+10%", "+0Hz"),        # Malay
+        "ro": ("ro-RO-EmilNeural", "+10%", "+0Hz"),         # Romanian
+        "sk": ("sk-SK-LukasNeural", "+10%", "+0Hz"),        # Slovak
+        "th": ("th-TH-NiwatNeural", "+10%", "+0Hz"),        # Thai
+        "uk": ("uk-UA-OstapNeural", "+10%", "+0Hz"),        # Ukrainian
+        "vi": ("vi-VN-NamMinhNeural", "+10%", "+0Hz"),      # Vietnamese
+        "hu": ("hu-HU-TamasNeural", "+5%", "+0Hz"),        # Hungarian
+        "bg": ("bg-BG-BorislavNeural", "+5%", "+0Hz"),      # Bulgarian
+        "hr": ("hr-HR-SreckoNeural", "+5%", "+0Hz"),       # Croatian
+        "sr": ("sr-RS-NicholasNeural", "+5%", "+0Hz"),     # Serbian
+        "sl": ("sl-SI-RokNeural", "+5%", "+0Hz"),          # Slovenian
+        "et": ("et-EE-KertNeural", "+5%", "+0Hz"),         # Estonian
+        "lv": ("lv-LV-NilsNeural", "+5%", "+0Hz"),         # Latvian
+        "lt": ("lt-LT-LeonasNeural", "+5%", "+0Hz"),       # Lithuanian
+        "fa": ("fa-IR-FaridNeural", "+5%", "+0Hz"),        # Persian
+        "ur": ("ur-PK-AsadNeural", "+5%", "+0Hz"),         # Urdu
+        "bn": ("bn-IN-BashkarNeural", "+5%", "+0Hz"),      # Bengali
+        "ta": ("ta-IN-ValluvarNeural", "+5%", "+0Hz"),     # Tamil
+        "te": ("te-IN-MohanNeural", "+5%", "+0Hz"),        # Telugu
+        "kn": ("kn-IN-GaganNeural", "+5%", "+0Hz"),        # Kannada
+        "ml": ("ml-IN-MidhunNeural", "+5%", "+0Hz"),       # Malayalam
+        "gu": ("gu-IN-NiranjanNeural", "+5%", "+0Hz"),     # Gujarati
+        "mr": ("mr-IN-ManoharNeural", "+5%", "+0Hz"),      # Marathi
+        "pa": ("pa-IN-HarpreetNeural", "+5%", "+0Hz"),     # Punjabi
+    }
+
+    # 1. Native Script / Unicode Block Checks (instant, deterministic for non-Latin scripts)
+    if bool(re.search(r'[\u0900-\u097F]', text)):
+        detected_lang = "hi"
+    elif is_explicit_hinglish or is_hinglish_text(text):
+        detected_lang = "hinglish"
     elif bool(re.search(r'[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF]', text)):
-        # Japanese (Hiragana/Katakana/Kanji)
-        selected_voice = "ja-JP-KeitaNeural"
-        selected_rate = "+5%"
-        selected_pitch = "+0Hz"
+        detected_lang = "ja"
+    elif bool(re.search(r'[\uAC00-\uD7AF\u1100-\u11FF]', text)):
+        detected_lang = "ko"
     elif bool(re.search(r'[\u4E00-\u9FFF]', text)):
-        # Chinese (Hanzi)
-        selected_voice = "zh-CN-YunxiNeural"
-        selected_rate = "+5%"
-        selected_pitch = "+0Hz"
+        detected_lang = "zh"
     elif bool(re.search(r'[\u0400-\u04FF]', text)):
-        # Russian (Cyrillic)
-        selected_voice = "ru-RU-DmitryNeural"
-        selected_rate = "+5%"
-        selected_pitch = "+0Hz"
+        detected_lang = "ru"
     elif bool(re.search(r'[\u0600-\u06FF]', text)):
-        # Arabic
-        selected_voice = "ar-SA-HamedNeural"
-        selected_rate = "+5%"
-        selected_pitch = "+0Hz"
+        detected_lang = "ar"
+    elif bool(re.search(r'[\u0370-\u03FF]', text)):
+        detected_lang = "el"
+    elif bool(re.search(r'[\u0590-\u05FF]', text)):
+        detected_lang = "he"
+    elif bool(re.search(r'[\u0E00-\u0E7F]', text)):
+        detected_lang = "th"
     else:
-        # 2. European Language Heuristics (Regex for keywords and accent characters)
-        is_spanish = bool(re.search(r'\b(hola|gracias|buenos|días|amigo|usted|sí|no|para|con|como|este|esta|todo|bien|hacer|tengo)\b|[¡¿áéíóúñÁÉÍÓÚÑ]', text_lower))
-        is_french = bool(re.search(r'\b(bonjour|merci|oui|le|la|les|un|une|et|en|que|est|ce|pour|avec|mais|nous|vous|tout|faire)\b|[çœéèàùâêîôûëïüÇÉÈÀÙ]', text_lower))
-        is_german = bool(re.search(r'\b(hallo|danke|ja|nein|der|die|das|ein|eine|und|in|dass|ist|es|für|mit|aber|wir|sie|ihr|gut|machen)\b|[äöüßÄÖÜ]', text_lower))
-        is_italian = bool(re.search(r'\b(ciao|grazie|si|il|la|i|le|un|una|e|in|che|è|per|con|ma|noi|voi|tutto|fare)\b|[àèéìòóùÀÈÉÌÒÓÙ]', text_lower))
-        is_portuguese = bool(re.search(r'\b(olá|obrigado|sim|o|a|os|as|um|uma|e|em|que|é|para|com|mas|nós|vocês|tudo|fazer)\b|[áéíóúâêôãõçÁÉÍÓÚÂÊÔÃÕÇ]', text_lower))
+        # 2. Dynamic langdetect call for Latin scripts (Spanish, French, German, Italian, etc.)
+        try:
+            from langdetect import detect, DetectorFactory
+            DetectorFactory.seed = 0
+            detected_lang = detect(text).lower()
+        except Exception as e:
+            print(f"[Smarty TTS] Language detection failed: {e}. Defaulting to English.")
+            detected_lang = "en"
 
-        if is_spanish:
-            selected_voice = "es-ES-AlvaroNeural"
-            selected_rate = "+6%"
-            selected_pitch = "+0Hz"
-        elif is_french:
-            selected_voice = "fr-FR-HenriNeural"
-            selected_rate = "+5%"
-            selected_pitch = "+0Hz"
-        elif is_german:
-            selected_voice = "de-DE-KillianNeural"
-            selected_rate = "+5%"
-            selected_pitch = "+0Hz"
-        elif is_italian:
-            selected_voice = "it-IT-GianniNeural"
-            selected_rate = "+5%"
-            selected_pitch = "+0Hz"
-        elif is_portuguese:
-            selected_voice = "pt-BR-AntonioNeural"
-            selected_rate = "+5%"
-            selected_pitch = "+0Hz"
+    # Route to native voice from VOICE_MAP for non-English languages
+    if detected_lang != "en" and detected_lang in VOICE_MAP:
+        selected_voice, selected_rate, selected_pitch = VOICE_MAP[detected_lang]
+    elif detected_lang != "en" and (base_lang := detected_lang.split("-")[0]) in VOICE_MAP:
+        selected_voice, selected_rate, selected_pitch = VOICE_MAP[base_lang]
+    elif custom_voice.endswith("MultilingualNeural") and detected_lang == "en":
+        selected_voice, selected_rate, selected_pitch = custom_voice, custom_rate, custom_pitch
+    else:
+        selected_voice, selected_rate, selected_pitch = VOICE_MAP.get(detected_lang, (custom_voice, custom_rate, custom_pitch))
 
-    async def _generate_and_play():
-        # Generate speech with Smarty voice settings
+    try:
+        print(f"[Smarty TTS] Text: '{text[:40]}...', Detected lang: '{detected_lang}', routing to voice: '{selected_voice}'")
+    except Exception:
+        try:
+            safe_text = text[:40].encode('ascii', errors='replace').decode('ascii')
+            print(f"[Smarty TTS] Text: '{safe_text}...', Detected lang: '{detected_lang}', routing to voice: '{selected_voice}'")
+        except Exception:
+            pass
+
+    async def _synth_sentence(sentence_text: str) -> io.BytesIO:
         communicate = edge_tts.Communicate(
-            text,
+            sentence_text,
             voice=selected_voice,
             rate=selected_rate,
             pitch=selected_pitch
         )
+        buf = io.BytesIO()
+        async for chunk in communicate.stream():
+            if chunk["type"] == "audio":
+                buf.write(chunk["data"])
+        buf.seek(0)
+        return buf
+
+    async def _generate_and_play():
+        import io
+        import re
         
-        # Use unique temp file to avoid locking issues
-        tmp_file = os.path.join(tempfile.gettempdir(), f"smarty_tts_{uuid.uuid4().hex[:8]}.mp3")
-        await communicate.save(tmp_file)
+        # Split into sentences for pipelined low-latency playback (handles Western, Japanese, and CJK punctuation)
+        raw_sentences = [s.strip() for s in re.split(r'(?<=[.!?])\s+|(?<=[。！？\n])\s*', text) if s.strip()]
+        # If no split or single sentence, treat as single item
+        sentences = raw_sentences if raw_sentences else [text]
         
-        # Small delay to ensure file handle is released
-        import time
-        time.sleep(0.1)
+        # Pipelined sentence synthesis: start sentence 1 immediately
+        s1_task = asyncio.create_task(_synth_sentence(sentences[0]))
+        next_task = None
         
-        # Play the audio
-        _play_audio_file(tmp_file, wait=True)
-        
-        # Cleanup temp file after playback
-        try:
-            os.remove(tmp_file)
-        except Exception:
-            pass
+        for i in range(len(sentences)):
+            # Concurrently pre-fetch the upcoming sentence in memory while current is handled
+            if i + 1 < len(sentences):
+                next_task = asyncio.create_task(_synth_sentence(sentences[i + 1]))
+                
+            if i == 0:
+                current_buf = await s1_task
+            else:
+                current_buf = await next_task_prev
+                
+            # Play directly from memory buffer (zero disk I/O)
+            _play_audio_file(current_buf, wait=True)
+            next_task_prev = next_task
 
     def _run_in_thread():
         try:
@@ -879,7 +1152,11 @@ def _speak_edge_tts(text: str, wait: bool = False) -> Dict[str, Any]:
             loop.run_until_complete(_generate_and_play())
             loop.close()
         except Exception as e:
-            print(f"[Smarty TTS] Playback error: {e}")
+            print(f"[Smarty TTS] Edge-TTS error ({e}), falling back to Windows SAPI...")
+            try:
+                _speak_sapi_fallback(text, wait=wait)
+            except Exception as sapi_err:
+                print(f"[Smarty TTS] SAPI fallback also failed: {sapi_err}")
 
     # Run in background thread so it doesn't block by default
     thread = threading.Thread(target=_run_in_thread, daemon=not wait)
@@ -891,38 +1168,38 @@ def _speak_edge_tts(text: str, wait: bool = False) -> Dict[str, Any]:
     return {"success": True, "message": f"Smarty speaking: {text[:50]}..."}
 
 
-def _play_audio_file(file_path: str, wait: bool = False):
-    """Play an audio file using pygame mixer."""
+def _play_audio_file(source, wait: bool = False):
+    """Play an audio file or in-memory BytesIO stream using pygame mixer."""
     try:
         import pygame
         if not pygame.mixer.get_init():
-            pygame.mixer.init()
+            pygame.mixer.init(frequency=24000, buffer=1024)
         
-        pygame.mixer.music.load(file_path)
+        pygame.mixer.music.load(source)
         pygame.mixer.music.play()
         
         # Wait for playback to finish
         if wait:
+            import time
             while pygame.mixer.music.get_busy():
-                import time
-                time.sleep(0.1)
+                time.sleep(0.04)
             
-    except ImportError:
-        # Fallback: use system player
-        if sys.platform == 'win32':
-            # Use PowerShell to play the mp3
+    except Exception as e:
+        # Fallback: if pygame fails and source is a file path, try system player
+        if isinstance(source, str) and sys.platform == 'win32':
             ps_cmd = (
                 f"Add-Type -AssemblyName presentationCore; "
                 f"$player = New-Object System.Windows.Media.MediaPlayer; "
-                f"$player.Open('{file_path}'); "
+                f"$player.Open('{source}'); "
                 f"$player.Play(); "
-                f"Start-Sleep -Seconds 30" # Max 30s playback
+                f"Start-Sleep -Seconds 30"
             )
             if wait:
-                # Wait for powershell to finish
                 subprocess.run(["powershell", "-Command", ps_cmd], shell=True)
             else:
                 subprocess.Popen(["powershell", "-Command", ps_cmd], shell=True)
+        else:
+            print(f"[Smarty Audio] Playback error: {e}")
     except Exception as e:
         print(f"[Smarty TTS] Audio playback error: {e}")
 

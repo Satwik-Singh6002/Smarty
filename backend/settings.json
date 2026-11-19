@@ -33,5 +33,12 @@
         }
     ],
     "kasa_devices": [],
-    "camera_flipped": false
+    "camera_flipped": false,
+    "barge_in_enabled": true,
+    "barge_in_threshold": 5000,
+    "normal_vad_threshold": 800,
+    "voice_energy_threshold": 300,
+    "smarty_voice": "en-US-AvaMultilingualNeural",
+    "smarty_rate": "+8%",
+    "smarty_pitch": "-6Hz"
 }

@@ -31,6 +31,10 @@ SpeechRecognition
 pyautogui
 psutil
 pyperclip
-# JARVIS Voice (Edge TTS Neural Voices)
+pycaw
+screen-brightness-control
+wmi
+# Smarty Voice (Edge TTS Neural Voices)
 edge-tts
 pygame
+langdetect

@@ -1,14 +1,32 @@
-import React, { useEffect, useState } from 'react';
-import { Lock, Unlock, User, Power } from 'lucide-react';
+import React, { useEffect, useState, useRef } from 'react';
+import { Lock, Unlock, User, Power, Camera, RefreshCw, CheckCircle2, ShieldCheck, AlertCircle, Scan, Sparkles } from 'lucide-react';
 
 const AuthLock = ({ socket, onAuthenticated, onAnimationComplete }) => {
     const [frameSrc, setFrameSrc] = useState(null);
-    const [message, setMessage] = useState("Initializing Security...");
+    const [faceDetected, setFaceDetected] = useState(false);
+    const [faceCentered, setFaceCentered] = useState(false);
+    const [faceDistanceOk, setFaceDistanceOk] = useState(false);
+    const [qualityMsg, setQualityMsg] = useState("Looking for face...");
+    const [similarity, setSimilarity] = useState(0.0);
+    const [statusMessage, setStatusMessage] = useState("Initializing Biometric Scanner...");
     const [isUnlocking, setIsUnlocking] = useState(false);
     
-    // Registration State
+    // Enrollment state
     const [needsRegistration, setNeedsRegistration] = useState(false);
     const [isRegistering, setIsRegistering] = useState(false);
+    const [enrollProgress, setEnrollProgress] = useState(0);
+    const [isEnrolling, setIsEnrolling] = useState(false);
+    const [registrationSuccess, setRegistrationSuccess] = useState(false);
+
+    // Keep callback refs stable to prevent unneeded re-subscriptions
+    const onAuthRef = useRef(onAuthenticated);
+    const onCompleteRef = useRef(onAnimationComplete);
+    const isUnlockingRef = useRef(false);
+
+    useEffect(() => {
+        onAuthRef.current = onAuthenticated;
+        onCompleteRef.current = onAnimationComplete;
+    }, [onAuthenticated, onAnimationComplete]);
 
     useEffect(() => {
         if (!socket) {
@@ -16,190 +34,388 @@ const AuthLock = ({ socket, onAuthenticated, onAnimationComplete }) => {
             return;
         }
 
-        console.log("[AuthLock] Mounted. Socket connected status:", socket.connected);
+        console.log("[AuthLock] Mounting biometric security interface...");
 
         const handleAuthStatus = (data) => {
-            console.log("[AuthLock] Received auth_status:", data);
-            if (data.authenticated && !isUnlocking) {
-                // Start Unlock Sequence
+            console.log("[AuthLock] auth_status:", data);
+            
+            if (data.authenticated && !isUnlockingRef.current) {
+                isUnlockingRef.current = true;
                 setIsUnlocking(true);
-                setMessage("Identity Verified. Access Granted.");
+                setStatusMessage("Identity Verified. Access Granted.");
 
-                // Wait for animation then notify parent
                 setTimeout(() => {
-                    onAuthenticated(true);
-                }, 2000); // 2 seconds animation
-            } else if (!data.authenticated && !isUnlocking) {
+                    if (onAuthRef.current) onAuthRef.current(true);
+                    if (onCompleteRef.current) onCompleteRef.current();
+                }, 1200);
+            } else if (!data.authenticated && !isUnlockingRef.current) {
                 if (data.needs_registration) {
                     setNeedsRegistration(true);
-                    setIsRegistering(false);
-                    setMessage("No face registered. Please register owner's face.");
+                    setIsRegistering(true);
+                    setStatusMessage("No owner face registered. Please enroll face.");
                 } else if (data.is_registering) {
                     setNeedsRegistration(true);
                     setIsRegistering(true);
-                    setMessage("Position face and click Capture.");
+                    setStatusMessage("Position face in the reticle and click Enroll.");
                 } else {
                     setNeedsRegistration(false);
                     setIsRegistering(false);
-                    setMessage("Look at the camera to unlock.");
+                    setStatusMessage("Look into the camera to unlock.");
                 }
             }
         };
 
         const handleAuthFrame = (data) => {
-            setFrameSrc(`data:image/jpeg;base64,${data.image}`);
+            if (!data) return;
+            if (typeof data === 'object') {
+                if (data.image) setFrameSrc(`data:image/jpeg;base64,${data.image}`);
+                if (typeof data.face_detected !== 'undefined') setFaceDetected(Boolean(data.face_detected));
+                if (typeof data.face_centered !== 'undefined') setFaceCentered(Boolean(data.face_centered));
+                if (typeof data.face_distance_ok !== 'undefined') setFaceDistanceOk(Boolean(data.face_distance_ok));
+                if (data.quality_msg) setQualityMsg(data.quality_msg);
+                if (typeof data.similarity === 'number') setSimilarity(data.similarity);
+                if (typeof data.enrollment_progress === 'number' && data.enrollment_progress > 0) {
+                    setEnrollProgress(data.enrollment_progress);
+                }
+            } else {
+                setFrameSrc(`data:image/jpeg;base64,${data}`);
+            }
+        };
+
+        const handleEnrollProgress = (data) => {
+            console.log("[AuthLock] enroll_progress:", data);
+            setIsEnrolling(true);
+            if (typeof data.progress === 'number') {
+                setEnrollProgress(data.progress);
+            }
+            if (data.message) {
+                setStatusMessage(data.message);
+            }
         };
 
         const handleRegistrationSuccess = (data) => {
-            console.log("[AuthLock] Received registration_success:", data);
-            setMessage("Face registered successfully!");
-            setNeedsRegistration(false);
-            setIsRegistering(false);
+            console.log("[AuthLock] registration_success:", data);
+            setRegistrationSuccess(true);
+            setEnrollProgress(100);
+            setIsEnrolling(false);
+            setStatusMessage("Owner Face Enrolled Successfully!");
+            
+            setTimeout(() => {
+                isUnlockingRef.current = true;
+                setIsUnlocking(true);
+                setTimeout(() => {
+                    if (onAuthRef.current) onAuthRef.current(true);
+                    if (onCompleteRef.current) onCompleteRef.current();
+                }, 1200);
+            }, 800);
         };
 
         const handleError = (data) => {
-            console.error("[AuthLock] Received error:", data);
-            if (data.msg) {
-                setMessage(data.msg);
+            console.error("[AuthLock] Error received:", data);
+            setIsEnrolling(false);
+            if (data && data.msg) {
+                setStatusMessage(data.msg);
             }
         };
 
         socket.on('auth_status', handleAuthStatus);
         socket.on('auth_frame', handleAuthFrame);
+        socket.on('enroll_progress', handleEnrollProgress);
         socket.on('registration_success', handleRegistrationSuccess);
         socket.on('error', handleError);
 
-        // Check registration on load
-        console.log("[AuthLock] Emitting check_registration...");
+        // Single check on mount
         socket.emit('check_registration');
 
         return () => {
-            console.log("[AuthLock] Unmounting / cleaning up listeners.");
+            console.log("[AuthLock] Unmounting and cleaning listeners.");
             socket.off('auth_status', handleAuthStatus);
             socket.off('auth_frame', handleAuthFrame);
+            socket.off('enroll_progress', handleEnrollProgress);
             socket.off('registration_success', handleRegistrationSuccess);
             socket.off('error', handleError);
         };
-    }, [socket, onAuthenticated, onAnimationComplete, isUnlocking]);
+    }, [socket]);
+
+    const handleStartMultiEnrollment = () => {
+        setIsEnrolling(true);
+        setEnrollProgress(10);
+        setStatusMessage("Hold steady — calibrating multi-sample profile...");
+        if (socket) {
+            socket.emit('start_enrollment');
+        }
+    };
+
+    const handleSingleCapture = () => {
+        setStatusMessage("Processing biometric capture...");
+        if (socket) {
+            socket.emit('capture_registration');
+        }
+    };
+
+    const handleStartRegistrationMode = () => {
+        setNeedsRegistration(true);
+        setIsRegistering(true);
+        setEnrollProgress(0);
+        setStatusMessage("Position face in the reticle and click Enroll.");
+        if (socket) {
+            socket.emit('start_registration');
+        }
+    };
+
+    const handleSwitchToAuth = () => {
+        setNeedsRegistration(false);
+        setIsRegistering(false);
+        setIsEnrolling(false);
+        setEnrollProgress(0);
+        setStatusMessage("Looking for owner face...");
+        if (socket) {
+            socket.emit('check_registration');
+        }
+    };
 
     const handleExit = () => {
-        console.log("[AuthLock] Exit requested");
-        try {
-            const { ipcRenderer } = window.require('electron');
-            ipcRenderer.send('window-close');
-        } catch (err) {
-            console.log("Not running in Electron, closing window...");
+        const electronAPI = window.electronAPI;
+        if (electronAPI && typeof electronAPI.close === 'function') {
+            electronAPI.close();
+        } else {
             window.close();
         }
     };
 
-    const themeColor = isUnlocking ? 'text-green-500' : 'text-cyan-500';
-    const borderColor = isUnlocking ? 'border-green-500' : 'border-cyan-500';
-    const shadowColor = isUnlocking ? 'shadow-[0_0_50px_rgba(34,197,94,0.4)]' : 'shadow-[0_0_50px_rgba(34,211,238,0.2)]';
-    const bgGradient = isUnlocking
-        ? 'from-green-900/40 via-black to-black'
-        : 'from-cyan-900/20 via-black to-black';
+    const isSuccess = isUnlocking || registrationSuccess;
+    const isReadyToEnroll = faceDetected && faceCentered && faceDistanceOk;
+
+    const themeColor = isSuccess ? 'text-emerald-400' : 'text-cyan-400';
+    const borderColor = isSuccess 
+        ? 'border-emerald-500' 
+        : (isReadyToEnroll ? 'border-emerald-400/90' : (faceDetected ? 'border-cyan-400' : 'border-cyan-800/60'));
+    
+    const shadowColor = isSuccess 
+        ? 'shadow-[0_0_70px_rgba(16,185,129,0.35)]' 
+        : (isReadyToEnroll ? 'shadow-[0_0_50px_rgba(52,211,153,0.25)]' : 'shadow-[0_0_40px_rgba(6,182,212,0.15)]');
+
+    const bgGradient = isSuccess
+        ? 'from-emerald-950/40 via-black to-black'
+        : 'from-cyan-950/30 via-black to-black';
+
+    const matchPercent = Math.min(100, Math.max(0, Math.round(similarity * 100)));
 
     return (
-        <div className={`fixed inset-0 z-[9999] bg-black flex flex-col items-center justify-center font-mono select-none transition-all duration-[2000ms] ${isUnlocking ? 'opacity-0 scale-110 pointer-events-none' : 'opacity-100'}`}
-            style={{ transitionDelay: '2000ms' }}> {/* Delay fade out to show success state */}
+        <div 
+            className={`fixed inset-0 z-[9999] bg-black/95 flex flex-col items-center justify-center font-mono select-none transition-all duration-1000 ${
+                isUnlocking ? 'opacity-0 scale-105 pointer-events-none' : 'opacity-100 scale-100'
+            }`}
+        >
+            {/* Ambient Cyber Background */}
+            <div className={`absolute inset-0 bg-[radial-gradient(circle_at_center,_var(--tw-gradient-stops))] ${bgGradient} pointer-events-none transition-colors duration-1000`}></div>
+            <div className="absolute inset-0 bg-[url('/noise.svg')] opacity-5 pointer-events-none"></div>
 
-            {/* Background Grid */}
-            <div className={`absolute inset-0 bg-[radial-gradient(circle_at_center,_var(--tw-gradient-stops))] ${bgGradient} pointer-events-none transition-colors duration-[1500ms]`}></div>
-
-            {/* Top Bar Actions / Exit Button */}
+            {/* Top Right Exit Application Button */}
             {!isUnlocking && (
                 <button
                     onClick={handleExit}
-                    className="absolute top-6 right-6 p-2 border border-red-500/30 rounded bg-red-950/20 text-red-400 hover:bg-red-500/30 transition-all flex items-center justify-center gap-1.5 text-xs font-mono tracking-wider z-50 cursor-pointer active:scale-95"
+                    className="absolute top-6 right-6 px-3 py-1.5 border border-red-500/40 rounded bg-red-950/20 text-red-400 hover:bg-red-500/30 hover:border-red-500/80 transition-all flex items-center justify-center gap-2 text-xs font-mono tracking-wider z-50 cursor-pointer active:scale-95"
                     title="Exit Application"
                 >
-                    <Power size={14} />
-                    Exit
+                    <Power size={13} />
+                    EXIT
                 </button>
             )}
 
-            <div className={`relative flex flex-col items-center gap-6 p-10 border ${borderColor}/30 rounded-lg bg-black/80 backdrop-blur-xl ${shadowColor} transition-all duration-[1500ms]`}>
-                <div className={`text-3xl font-bold tracking-[0.3em] uppercase drop-shadow-[0_0_10px_currentColor] flex items-center gap-4 ${themeColor} transition-colors duration-1000`}>
-                    {isUnlocking ? <Unlock size={32} /> : <Lock size={32} />}
-                    {isUnlocking ? "SYSTEM UNLOCKED" : (needsRegistration ? "ENROLL OWNER" : "SYSTEM LOCKED")}
+            {/* Central Security Card Frame */}
+            <div className={`relative flex flex-col items-center gap-5 p-8 sm:p-10 border ${borderColor} rounded-2xl bg-black/85 backdrop-blur-2xl ${shadowColor} transition-all duration-700 max-w-md w-full mx-4`}>
+                
+                {/* Cyber Brackets */}
+                <div className={`absolute -top-1.5 -left-1.5 w-4 h-4 border-t-2 border-l-2 ${borderColor}`}></div>
+                <div className={`absolute -top-1.5 -right-1.5 w-4 h-4 border-t-2 border-r-2 ${borderColor}`}></div>
+                <div className={`absolute -bottom-1.5 -left-1.5 w-4 h-4 border-b-2 border-l-2 ${borderColor}`}></div>
+                <div className={`absolute -bottom-1.5 -right-1.5 w-4 h-4 border-b-2 border-r-2 ${borderColor}`}></div>
+
+                {/* Header Title with Lock Status */}
+                <div className="flex flex-col items-center gap-1.5">
+                    <div className={`text-2xl sm:text-3xl font-extrabold tracking-[0.25em] uppercase drop-shadow-[0_0_12px_currentColor] flex items-center gap-3 ${themeColor} transition-colors duration-500`}>
+                        {isSuccess ? (
+                            <Unlock size={28} className="animate-pulse" />
+                        ) : (
+                            <Lock size={28} />
+                        )}
+                        <span>
+                            {isSuccess 
+                                ? "ACCESS GRANTED" 
+                                : (isRegistering ? "BIOMETRIC ENROLL" : "SYSTEM LOCKED")}
+                        </span>
+                    </div>
+                    <div className="text-[10px] uppercase tracking-widest text-cyan-500/70 flex items-center gap-1.5">
+                        <ShieldCheck size={12} className="text-cyan-400" />
+                        {isRegistering ? "High-Accuracy Multi-Sample Enrollment" : "Biometric Face Recognition"}
+                    </div>
                 </div>
 
-                {/* Camera Feed Frame */}
-                <div className={`relative w-64 h-64 border-2 ${borderColor}/50 rounded-lg overflow-hidden bg-gray-900 shadow-inner flex items-center justify-center transition-colors duration-500`}>
-                    {needsRegistration && !isRegistering ? (
-                        <div className="p-4 text-[11px] text-center text-cyan-300/80 leading-relaxed font-sans animate-fade-in">
-                            <User size={36} className="mx-auto mb-3 text-cyan-500/60 animate-bounce" />
-                            A.D.A requires a registered owner's face for biometric security.<br/><br/>
-                            Biometric data is processed locally and never uploaded.
-                        </div>
-                    ) : frameSrc ? (
+                {/* Camera Viewport with Circular Scanner Ring */}
+                <div className={`relative w-64 h-64 border-2 ${borderColor} rounded-2xl overflow-hidden bg-gray-950 shadow-inner flex items-center justify-center transition-colors duration-500`}>
+                    
+                    {frameSrc ? (
                         <img
                             src={frameSrc}
-                            alt="Auth Camera"
-                            className={`w-full h-full object-cover transform scale-x-[-1] transition-opacity duration-500 ${isUnlocking ? 'opacity-50 grayscale' : 'opacity-100'}`}
+                            alt="Biometric Feed"
+                            className={`w-full h-full object-cover transform scale-x-[-1] transition-all duration-500 ${
+                                isSuccess ? 'brightness-110 saturate-125' : 'brightness-100'
+                            }`}
                         />
                     ) : (
-                        <div className={`animate-pulse ${isUnlocking ? 'text-green-800' : 'text-cyan-800'}`}>
+                        <div className={`flex flex-col items-center gap-3 animate-pulse ${isSuccess ? 'text-emerald-500' : 'text-cyan-600'}`}>
                             <User size={64} />
+                            <span className="text-xs tracking-wider opacity-70">Initializing Camera Sensor...</span>
                         </div>
                     )}
 
-                    {/* Scanning Line Animation - remove on unlock/idle registration */}
-                    {!isUnlocking && (!needsRegistration || isRegistering) && (
-                        <div className="absolute top-0 left-0 w-full h-1 bg-cyan-400/80 shadow-[0_0_15px_cyan] animate-[scan_2s_ease-in-out_infinite]"></div>
-                    )}
+                    {/* Biometric Reticle & Target Rings */}
+                    <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
+                        {/* Target Circle */}
+                        <div className={`w-44 h-44 rounded-full border-2 transition-all duration-500 ${
+                            isSuccess 
+                                ? 'border-emerald-400 scale-95 shadow-[0_0_25px_rgba(16,185,129,0.7)]' 
+                                : (isReadyToEnroll 
+                                    ? 'border-emerald-400/90 scale-100 shadow-[0_0_20px_rgba(52,211,153,0.5)] animate-pulse' 
+                                    : (faceDetected 
+                                        ? 'border-cyan-400/70 border-dashed scale-100' 
+                                        : 'border-cyan-500/30 border-dashed scale-105'))
+                        }`}></div>
 
-                    {/* Success Overlay */}
-                    {isUnlocking && (
-                        <div className="absolute inset-0 flex items-center justify-center bg-green-500/20 animate-pulse">
-                            <Unlock size={64} className="text-green-400 drop-shadow-[0_0_20px_rgba(74,222,128,0.8)]" />
-                        </div>
-                    )}
-                </div>
+                        {/* Scanner Laser Sweep (Active when scanning) */}
+                        {!isSuccess && frameSrc && !isEnrolling && (
+                            <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-transparent via-cyan-400 to-transparent shadow-[0_0_12px_cyan] animate-[scan_2.2s_ease-in-out_infinite]"></div>
+                        )}
 
-                <div className={`text-sm tracking-widest text-center max-w-xs ${isUnlocking ? 'text-green-300' : 'text-cyan-300'} animate-pulse transition-colors duration-500`}>
-                    {message}
-                </div>
-
-                {/* Registration Buttons */}
-                {needsRegistration && (
-                    <div className="mt-2 w-full flex justify-center">
-                        {!isRegistering ? (
-                            <button
-                                onClick={() => {
-                                    console.log("[AuthLock] Emitting start_registration...");
-                                    socket.emit('start_registration');
-                                }}
-                                className="px-4 py-2 border border-cyan-500/50 rounded bg-cyan-950/40 text-cyan-400 font-mono text-xs uppercase tracking-widest hover:bg-cyan-500/20 transition-all shadow-[0_0_15px_rgba(6,182,212,0.1)] active:scale-95"
-                            >
-                                Start Face Registration
-                            </button>
-                        ) : (
-                            <button
-                                onClick={() => {
-                                    console.log("[AuthLock] Emitting capture_registration...");
-                                    socket.emit('capture_registration');
-                                }}
-                                className="px-4 py-2 border border-green-500/50 rounded bg-green-950/40 text-green-400 font-mono text-xs uppercase tracking-widest hover:bg-green-500/20 transition-all shadow-[0_0_15px_rgba(34,197,94,0.1)] active:scale-95 animate-pulse"
-                            >
-                                Capture & Register Face
-                            </button>
+                        {/* Success Hologram Badge */}
+                        {isSuccess && (
+                            <div className="absolute inset-0 flex flex-col items-center justify-center bg-emerald-950/45 backdrop-blur-[2px] transition-all animate-fade-in">
+                                <CheckCircle2 size={64} className="text-emerald-400 drop-shadow-[0_0_30px_rgba(16,185,129,0.95)] animate-bounce" />
+                                <span className="mt-2 text-xs font-bold text-emerald-300 tracking-widest uppercase">Verified</span>
+                            </div>
                         )}
                     </div>
+
+                    {/* Top Status Pill: Face Alignment Indicator */}
+                    {frameSrc && !isSuccess && (
+                        <div className="absolute top-2 left-2 z-20">
+                            <span className={`px-2 py-0.5 rounded text-[9px] font-bold tracking-wider uppercase backdrop-blur-md flex items-center gap-1 border ${
+                                isReadyToEnroll
+                                    ? 'bg-emerald-950/90 text-emerald-300 border-emerald-500/70 shadow-[0_0_10px_rgba(16,185,129,0.4)]'
+                                    : (faceDetected 
+                                        ? 'bg-cyan-950/80 text-cyan-300 border-cyan-500/50' 
+                                        : 'bg-black/75 text-cyan-400/60 border-cyan-800/40')
+                            }`}>
+                                <span className={`w-1.5 h-1.5 rounded-full ${isReadyToEnroll ? 'bg-emerald-400 animate-ping' : (faceDetected ? 'bg-cyan-400' : 'bg-cyan-700')}`}></span>
+                                {isReadyToEnroll ? "READY TO ENROLL" : (faceDetected ? "FACE DETECTED" : "SEARCHING")}
+                            </span>
+                        </div>
+                    )}
+
+                    {/* Live Match Score Gauge (in auth mode) */}
+                    {!isRegistering && !isSuccess && frameSrc && faceDetected && similarity > 0 && (
+                        <div className="absolute bottom-2 left-2 right-2 z-20 bg-black/85 backdrop-blur-md px-2.5 py-1.5 rounded-lg border border-cyan-800/60 flex items-center justify-between">
+                            <span className="text-[10px] text-cyan-400 uppercase tracking-wider flex items-center gap-1">
+                                <Scan size={11} />
+                                Match Confidence
+                            </span>
+                            <span className={`text-[10px] font-bold ${similarity >= 0.93 ? 'text-emerald-400' : 'text-cyan-300'}`}>
+                                {matchPercent}%
+                            </span>
+                        </div>
+                    )}
+                </div>
+
+                {/* Progressive Enrollment Progress Bar */}
+                {isRegistering && (enrollProgress > 0 || isEnrolling) && (
+                    <div className="w-full flex flex-col gap-1.5">
+                        <div className="flex justify-between items-center text-[10px] font-mono tracking-wider">
+                            <span className="text-cyan-400 uppercase">Calibrating 5-Sample Profile</span>
+                            <span className="text-emerald-400 font-bold">{enrollProgress}%</span>
+                        </div>
+                        <div className="w-full h-2 bg-gray-900 rounded-full overflow-hidden border border-cyan-800/50">
+                            <div 
+                                className="h-full bg-gradient-to-r from-cyan-500 via-teal-400 to-emerald-400 transition-all duration-300 shadow-[0_0_12px_rgba(52,211,153,0.5)]"
+                                style={{ width: `${enrollProgress}%` }}
+                            />
+                        </div>
+                    </div>
                 )}
+
+                {/* Real-time Guidance Message */}
+                <div className={`text-xs sm:text-sm tracking-wider text-center max-w-xs font-medium transition-colors duration-300 ${
+                    isSuccess 
+                        ? 'text-emerald-300' 
+                        : (isReadyToEnroll ? 'text-emerald-300 font-bold' : (faceDetected ? 'text-cyan-300' : 'text-cyan-400/80'))
+                }`}>
+                    {isRegistering && !isSuccess && qualityMsg ? qualityMsg : statusMessage}
+                </div>
+
+                {/* Primary Action Controls */}
+                <div className="w-full flex flex-col gap-2.5 mt-1">
+                    {/* Enrollment Controls */}
+                    {isRegistering ? (
+                        <div className="flex flex-col gap-2 w-full">
+                            {/* Main Recommended Multi-Sample Enrollment Button */}
+                            <button
+                                onClick={handleStartMultiEnrollment}
+                                disabled={isEnrolling}
+                                className={`w-full py-2.5 px-4 rounded-lg font-mono text-xs uppercase tracking-widest font-bold flex items-center justify-center gap-2 transition-all cursor-pointer border ${
+                                    isReadyToEnroll
+                                        ? 'bg-emerald-500/25 text-emerald-300 border-emerald-500/70 hover:bg-emerald-500/35 shadow-[0_0_20px_rgba(16,185,129,0.35)] animate-pulse'
+                                        : 'bg-cyan-950/40 text-cyan-400 border-cyan-700/50 hover:bg-cyan-900/40'
+                                } active:scale-98`}
+                            >
+                                <Sparkles size={15} />
+                                {isEnrolling ? `Enrolling (${enrollProgress}%)...` : "Start Multi-Sample Enrollment"}
+                            </button>
+
+                            {/* Secondary Quick Capture Button */}
+                            <button
+                                onClick={handleSingleCapture}
+                                disabled={isEnrolling}
+                                className="w-full py-1.5 px-3 rounded border border-cyan-800/50 bg-black/40 hover:bg-cyan-950/30 text-cyan-400/90 hover:text-cyan-200 text-[11px] font-mono tracking-wider flex items-center justify-center gap-1.5 transition-all active:scale-98"
+                            >
+                                <Camera size={13} />
+                                Instant Single Capture
+                            </button>
+
+                            {/* Return to Unlock if face was already enrolled */}
+                            {!needsRegistration && (
+                                <button
+                                    onClick={handleSwitchToAuth}
+                                    className="text-[11px] text-cyan-500/70 hover:text-cyan-300 text-center py-1 transition-colors"
+                                >
+                                    Cancel & Return to Unlock
+                                </button>
+                            )}
+                        </div>
+                    ) : (
+                        /* In Locked Authentication Mode */
+                        <div className="flex flex-col items-center gap-2 w-full">
+                            <button
+                                onClick={handleStartRegistrationMode}
+                                className="w-full py-2 px-3 rounded border border-cyan-800/60 bg-cyan-950/20 hover:bg-cyan-900/30 text-cyan-400 hover:text-cyan-200 text-xs font-mono tracking-wider flex items-center justify-center gap-2 transition-all active:scale-98"
+                            >
+                                <RefreshCw size={13} />
+                                Re-enroll Owner Face
+                            </button>
+                        </div>
+                    )}
+                </div>
             </div>
 
-            {/* Keyframe for scan animation */}
+            {/* CSS Keyframe for Laser Scanning Animation */}
             <style>{`
                 @keyframes scan {
-                    0%, 100% { top: 0%; opacity: 0; }
-                    50% { opacity: 1; }
-                    100% { top: 100%; opacity: 0; }
+                    0% { top: 0%; opacity: 0.2; }
+                    50% { top: 96%; opacity: 1; }
+                    100% { top: 0%; opacity: 0.2; }
                 }
-             `}</style>
+            `}</style>
         </div>
     );
 };
 
-export default AuthLock;
+export default React.memo(AuthLock);

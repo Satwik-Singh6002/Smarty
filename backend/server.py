@@ -1,6 +1,14 @@
 import sys
 import asyncio
 
+# Force stdout/stderr to UTF-8 to prevent charmap/UnicodeEncodeError on Windows console
+if sys.platform == 'win32':
+    try:
+        sys.stdout.reconfigure(encoding='utf-8')
+        sys.stderr.reconfigure(encoding='utf-8')
+    except Exception:
+        pass
+
 # Fix for asyncio subprocess support on Windows
 # MUST BE SET BEFORE OTHER IMPORTS
 if sys.platform == 'win32':
@@ -13,9 +21,7 @@ engineio.payload.Payload.max_decode_packets = 1000
 
 import uvicorn
 from fastapi import FastAPI
-import asyncio
 import threading
-import sys
 import os
 import json
 from datetime import datetime
@@ -61,9 +67,23 @@ from kasa_agent import KasaAgent
 from text_chat_loop import TextChatLoop
 from wake_word_listener import get_wake_word_listener
 
+from contextlib import asynccontextmanager
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    print("[SERVER DEBUG] Startup Lifespan Event Triggered")
+    print("[SERVER] Startup: Initializing Kasa Agent...")
+    try:
+        if kasa_agent:
+            await kasa_agent.initialize()
+    except Exception as e:
+        print(f"[SERVER] Kasa init exception: {e}")
+    yield
+    print("[SERVER] Lifespan Shutdown Complete.")
+
 # Create a Socket.IO server
 sio = socketio.AsyncServer(async_mode='asgi', cors_allowed_origins='*')
-app = FastAPI()
+app = FastAPI(lifespan=lifespan)
 app_socketio = socketio.ASGIApp(sio, app)
 
 import signal
@@ -93,7 +113,7 @@ wake_word_task = None
 loop_task = None
 authenticator = None
 kasa_agent = KasaAgent()
-SETTINGS_FILE = "settings.json"
+SETTINGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "settings.json")
 
 # Global state for voice loop in text chat (OpenRouter) mode
 voice_listening_active = False
@@ -101,9 +121,11 @@ voice_listener_task = None
 is_speaking = False
 voice_language_mode = "en-IN"
 voice_device_index = None
+voice_recognizer = None
 
 DEFAULT_SETTINGS = {
     "face_auth_enabled": False, # Default OFF as requested
+
     "tool_permissions": {
         "generate_cad": False,
         "run_web_agent": False,
@@ -122,10 +144,19 @@ DEFAULT_SETTINGS = {
     },
     "printers": [], # List of {host, port, name, type}
     "kasa_devices": [], # List of {ip, alias, model}
-    "camera_flipped": False # Invert cursor horizontal direction
+    "camera_flipped": False, # Invert cursor horizontal direction
+    "barge_in_enabled": True,
+    "barge_in_threshold": 5000,
+    "normal_vad_threshold": 800,
+    "voice_energy_threshold": 300,
+    "smarty_voice": "en-US-AvaMultilingualNeural",
+    "smarty_rate": "+8%",
+    "smarty_pitch": "-6Hz"
 }
 
 SETTINGS = DEFAULT_SETTINGS.copy()
+
+
 
 def load_settings():
     global SETTINGS
@@ -167,15 +198,28 @@ def _create_authenticator():
     ref_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "reference.jpg")
     
     async def on_auth_status_change(is_authenticated):
+        if is_authenticated and authenticator and authenticator.is_registered():
+            SETTINGS["face_auth_enabled"] = True
+            save_settings()
+            await sio.emit('registration_status', {'registered': True})
+            await sio.emit('registration_success', {'message': 'Owner face biometric profile enrolled successfully!'})
+            await sio.emit('settings', get_settings_payload())
         await sio.emit('auth_status', {'authenticated': is_authenticated})
     
-    async def on_auth_frame(frame_b64):
-        await sio.emit('auth_frame', {'image': frame_b64})
+    async def on_auth_frame(frame_data):
+        if isinstance(frame_data, dict):
+            await sio.emit('auth_frame', frame_data)
+        else:
+            await sio.emit('auth_frame', {'image': frame_data})
+
+    async def on_enroll_progress(data):
+        await sio.emit('enroll_progress', data)
     
     return FaceAuthenticator(
         reference_image_path=ref_path,
         on_status_change=on_auth_status_change,
-        on_frame=on_auth_frame
+        on_frame=on_auth_frame,
+        on_enroll_progress=on_enroll_progress
     )
 
 try:
@@ -196,17 +240,18 @@ def listen_mic_sync(recognizer, mic):
             return None
 
 async def voice_listener_loop():
-    global voice_listening_active, is_speaking, voice_language_mode, voice_device_index, text_chat_loop
+    global voice_listening_active, is_speaking, voice_language_mode, voice_device_index, text_chat_loop, voice_recognizer
     print(f"[SERVER] Voice listener loop started with device_index={voice_device_index}")
     
     import speech_recognition as sr
     from system_tools import speak_text
     
     recognizer = sr.Recognizer()
+    voice_recognizer = recognizer
     recognizer.pause_threshold = 0.5       # Instant recognition after a brief pause (default 0.8s)
     recognizer.non_speaking_duration = 0.3 # Reduce leading/trailing quiet buffering (default 0.5s)
     recognizer.dynamic_energy_threshold = False
-    recognizer.energy_threshold = 300      # Skip background hums for faster turnaround
+    recognizer.energy_threshold = SETTINGS.get("voice_energy_threshold", 300)      # Skip background hums for faster turnaround
     try:
         mic = sr.Microphone(device_index=voice_device_index)
     except Exception as e:
@@ -244,26 +289,39 @@ async def voice_listener_loop():
                 if not text:
                     continue
                 
-                print(f"[VoiceListener] Transcribed: {text}")
+                try:
+                    print(f"[VoiceListener] Transcribed: {text}")
+                except Exception:
+                    try:
+                        safe_text = text.encode('ascii', errors='replace').decode('ascii')
+                        print(f"[VoiceListener] Transcribed (safe): {safe_text}")
+                    except Exception:
+                        pass
                 
                 lower_text = text.lower()
-                if any(phrase in lower_text for phrase in ["switch to hindi", "hindi mein baat karo", "hindi me baat karo"]):
-                    voice_language_mode = "hi-IN"
-                    is_speaking = True
-                    try:
-                        await asyncio.to_thread(speak_text, "अब मैं हिंदी में बात करूँगा, Buddy.", wait=True)
-                    finally:
-                        is_speaking = False
-                    await sio.emit('status', {'msg': 'Language switched to Hindi'})
-                    continue
-                elif any(phrase in lower_text for phrase in ["switch to english", "english mein baat karo", "english me baat karo"]):
-                    voice_language_mode = "en-IN"
-                    is_speaking = True
-                    try:
-                        await asyncio.to_thread(speak_text, "Sure, I will speak in English now, Buddy.", wait=True)
-                    finally:
-                        is_speaking = False
-                    await sio.emit('status', {'msg': 'Language switched to English'})
+                lang_switches = {
+                    ("hinglish", "hindi english"): ("en-IN", "[HINGLISH] Haan bilkul! Ab main natural Hinglish mein baat karunga, Buddy."),
+                    ("japanese", "ja-jp", "nihongo", "日本語"): ("ja-JP", "はい、承知いたしました！日本語でお話ししますね。"),
+                    ("hindi", "hi-in", "हिंदी"): ("hi-IN", "जी बिल्कुल! अब मैं हिंदी में बात करूँगा।"),
+                    ("spanish", "español", "es-es"): ("es-ES", "Claro, ahora hablaré en español, amigo."),
+                    ("french", "français", "fr-fr"): ("fr-FR", "Bien sûr, je vais parler en français maintenant."),
+                    ("german", "deutsch", "de-de"): ("de-DE", "Sicher, ich werde jetzt auf Deutsch sprechen."),
+                    ("chinese", "中文", "zh-cn"): ("zh-CN", "好的，我现在用中文交流。"),
+                    ("english", "en-in", "en-us"): ("en-IN", "Sure, I will speak in English now, Buddy.")
+                }
+                switched = False
+                for triggers, (lang_code, ack) in lang_switches.items():
+                    if any(trig in lower_text for trig in triggers) and any(w in lower_text for w in ["switch", "speak in", "baat karo", "parle", "habla", "話して", "说"]):
+                        voice_language_mode = lang_code
+                        is_speaking = True
+                        try:
+                            await asyncio.to_thread(speak_text, ack, wait=True)
+                        finally:
+                            is_speaking = False
+                        await sio.emit('status', {'msg': f'Voice language set to {lang_code}'})
+                        switched = True
+                        break
+                if switched:
                     continue
                 
                 await sio.emit('transcription', {'sender': 'User', 'text': text})
@@ -284,36 +342,25 @@ async def voice_listener_loop():
             except Exception as e:
                 print(f"[VoiceListener] Error processing audio: {e}")
 
-@app.on_event("startup")
-async def startup_event():
-    import sys
-    print(f"[SERVER DEBUG] Startup Event Triggered")
-    print(f"[SERVER DEBUG] Python Version: {sys.version}")
-    try:
-        loop = asyncio.get_running_loop()
-        print(f"[SERVER DEBUG] Running Loop: {type(loop)}")
-        policy = asyncio.get_event_loop_policy()
-        print(f"[SERVER DEBUG] Current Policy: {type(policy)}")
-    except Exception as e:
-        print(f"[SERVER DEBUG] Error checking loop: {e}")
-
-    print("[SERVER] Startup: Initializing Kasa Agent...")
-    await kasa_agent.initialize()
-
 @app.get("/status")
 async def status():
-    return {"status": "running", "service": "A.D.A Backend"}
+    return {"status": "running", "service": "Smarty Backend"}
 
 @sio.event
 async def connect(sid, environ):
     print(f"Client connected: {sid}")
-    await sio.emit('status', {'msg': 'Connected to A.D.A Backend'}, room=sid)
+    await sio.emit('status', {'msg': 'Connected to Smarty Backend'}, room=sid)
     # Check face auth status
     face_auth_on = SETTINGS.get("face_auth_enabled", False)
     face_registered = authenticator.is_registered() if authenticator else False
-    if face_auth_on and face_registered:
-        print(f"[SERVER] Face auth enabled & registered. Requiring authentication.")
-        await sio.emit('auth_status', {'authenticated': False}, room=sid)
+    if face_auth_on:
+        if face_registered:
+            print(f"[SERVER] Face auth enabled & registered. Requiring authentication.")
+            await sio.emit('auth_status', {'authenticated': False, 'needs_registration': False}, room=sid)
+            authenticator.start_authentication_loop()
+        else:
+            print(f"[SERVER] Face auth enabled but not registered. Requiring registration.")
+            await sio.emit('auth_status', {'authenticated': False, 'needs_registration': True}, room=sid)
     else:
         await sio.emit('auth_status', {'authenticated': True}, room=sid)
     # Send current settings
@@ -351,7 +398,7 @@ async def start_audio(sid, data=None):
              loop_task = None
         else:
              print("Audio loop already running. Re-connecting client to session.")
-             await sio.emit('status', {'msg': 'A.D.A Already Running'})
+             await sio.emit('status', {'msg': 'Smarty Already Running'})
              return
 
 
@@ -442,6 +489,11 @@ async def start_audio(sid, data=None):
         # Apply current permissions
         audio_loop.update_permissions(SETTINGS["tool_permissions"])
         
+        # Apply current VAD and barge-in settings
+        audio_loop._mute_during_ada_speech = SETTINGS.get("barge_in_enabled", True)
+        audio_loop._barge_in_threshold = SETTINGS.get("barge_in_threshold", 5000)
+        audio_loop._normal_vad_threshold = SETTINGS.get("normal_vad_threshold", 800)
+        
         # Check initial mute state
         if data and data.get('muted', False):
             print("Starting with Audio Paused")
@@ -462,8 +514,8 @@ async def start_audio(sid, data=None):
         
         loop_task.add_done_callback(handle_loop_exit)
         
-        print("Emitting 'A.D.A Started'")
-        await sio.emit('status', {'msg': 'A.D.A Started'})
+        print("Emitting 'Smarty Started'")
+        await sio.emit('status', {'msg': 'Smarty Started'})
 
         # Load saved printers
         saved_printers = SETTINGS.get("printers", [])
@@ -625,7 +677,7 @@ async def stop_audio(sid):
         audio_loop.stop() 
         print("Stopping Audio Loop")
         audio_loop = None
-        await sio.emit('status', {'msg': 'A.D.A Stopped'})
+        await sio.emit('status', {'msg': 'Smarty Stopped'})
 
 @sio.event
 async def pause_audio(sid):
@@ -767,7 +819,7 @@ async def start_text_chat(sid, data=None):
             voice_device_index = data['device_index']
             print(f"[SERVER] Updated voice_device_index: {voice_device_index}")
         
-        is_muted = data.get('muted', True) if data else True
+        is_muted = data.get('muted', False) if data else False
         if not is_muted:
             print("[SERVER] Voice listening active on reconnect")
             voice_listening_active = True
@@ -851,7 +903,7 @@ async def start_text_chat(sid, data=None):
         await sio.emit('status', {'msg': 'Text Chat Active (OpenRouter Mode)'})
         
         # Start voice loop if frontend says not muted
-        is_muted = data.get('muted', True) if data else True
+        is_muted = data.get('muted', False) if data else False
         if not is_muted:
             print("[SERVER] Starting Text Chat with voice listening active")
             voice_listening_active = True
@@ -896,11 +948,7 @@ async def stop_text_chat(sid):
             
         await sio.emit('status', {'msg': 'Text Chat Stopped'})
 
-import json
-from datetime import datetime
-from pathlib import Path
 
-# ... (imports)
 
 @sio.event
 async def video_frame(sid, data):
@@ -942,6 +990,8 @@ async def save_memory(sid, data):
             for msg in messages:
                 sender = msg.get('sender', 'Unknown')
                 text = msg.get('text', '')
+                time = msg.get('time', '')
+                f.write(f"[{time}] {sender}: {text}\n")
         print(f"Conversation saved to {filename}")
         await sio.emit('status', {'msg': 'Memory Saved Successfully'})
 
@@ -1135,7 +1185,7 @@ async def discover_printers(sid):
             return
         else:
             await sio.emit('printer_list', [])
-            await sio.emit('status', {'msg': "Connect to A.D.A to enable printer discovery"})
+            await sio.emit('status', {'msg': "Connect to Smarty to enable printer discovery"})
             return
         
     try:
@@ -1382,9 +1432,40 @@ async def update_settings(sid, data):
             else:
                 print("[SERVER] Face auth enabled but no face registered. Please register a face first.")
 
+    if "barge_in_enabled" in data:
+        SETTINGS["barge_in_enabled"] = data["barge_in_enabled"]
+        if audio_loop:
+            audio_loop._mute_during_ada_speech = data["barge_in_enabled"]
+            
+    if "barge_in_threshold" in data:
+        SETTINGS["barge_in_threshold"] = data["barge_in_threshold"]
+        if audio_loop:
+            audio_loop._barge_in_threshold = data["barge_in_threshold"]
+            
+    if "normal_vad_threshold" in data:
+        SETTINGS["normal_vad_threshold"] = data["normal_vad_threshold"]
+        if audio_loop:
+            audio_loop._normal_vad_threshold = data["normal_vad_threshold"]
+            
+    if "voice_energy_threshold" in data:
+        SETTINGS["voice_energy_threshold"] = data["voice_energy_threshold"]
+        if voice_recognizer:
+            voice_recognizer.energy_threshold = data["voice_energy_threshold"]
+
+    if "smarty_voice" in data:
+        SETTINGS["smarty_voice"] = data["smarty_voice"]
+        print(f"[SERVER] Smarty voice persona set to: {data['smarty_voice']}")
+        
+    if "smarty_rate" in data:
+        SETTINGS["smarty_rate"] = data["smarty_rate"]
+        
+    if "smarty_pitch" in data:
+        SETTINGS["smarty_pitch"] = data["smarty_pitch"]
+
     if "camera_flipped" in data:
         SETTINGS["camera_flipped"] = data["camera_flipped"]
         print(f"[SERVER] Camera flip set to: {data['camera_flipped']}")
+
 
     save_settings()
     # Broadcast new full settings
@@ -1483,8 +1564,23 @@ async def logout(sid):
     print("[SERVER] Logout requested. Locking system.")
     if authenticator:
         authenticator.authenticated = False
-        authenticator.running = False
-    await sio.emit('auth_status', {'authenticated': False})
+        authenticator.stop()
+    await sio.emit('auth_status', {'authenticated': False, 'needs_registration': False})
+    if authenticator and authenticator.is_registered():
+        authenticator.start_authentication_loop()
+
+@sio.event
+async def lock_system(sid):
+    """Lock the system explicitly."""
+    global authenticator
+    print("[SERVER] lock_system event received.")
+    if not authenticator:
+        authenticator = _create_authenticator()
+    authenticator.authenticated = False
+    is_registered = authenticator.is_registered()
+    await sio.emit('auth_status', {'authenticated': False, 'needs_registration': not is_registered})
+    if is_registered:
+        authenticator.start_authentication_loop()
 
 @sio.event
 async def check_registration(sid):
@@ -1492,63 +1588,81 @@ async def check_registration(sid):
     global authenticator
     is_registered = authenticator.is_registered() if authenticator else False
     face_auth_on = SETTINGS.get("face_auth_enabled", False)
-    print(f"[SERVER] check_registration called from sid: {sid}. is_registered: {is_registered}, face_auth_enabled: {face_auth_on}")
+    print(f"[SERVER] check_registration called: is_registered={is_registered}, face_auth_enabled={face_auth_on}")
     
-    await sio.emit('registration_status', {'registered': is_registered})
+    await sio.emit('registration_status', {'registered': is_registered}, room=sid)
     
     if not face_auth_on:
         # Face auth is disabled, auto-authenticate
-        await sio.emit('auth_status', {'authenticated': True})
+        await sio.emit('auth_status', {'authenticated': True}, room=sid)
     elif not is_registered:
         # No face registered, prompt for registration
-        await sio.emit('auth_status', {'authenticated': False, 'needs_registration': True})
+        await sio.emit('auth_status', {'authenticated': False, 'needs_registration': True}, room=sid)
+        if authenticator:
+            authenticator.start_registration_loop()
     else:
         # Face is registered, start auth loop
-        await sio.emit('auth_status', {'authenticated': False})
+        await sio.emit('auth_status', {'authenticated': False, 'needs_registration': False}, room=sid)
         try:
-            await authenticator.start_authentication_loop()
+            authenticator.start_authentication_loop()
         except Exception as e:
             print(f"[SERVER] Auth loop error: {e}")
-            await sio.emit('error', {'msg': f"Authentication error: {str(e)}"})
+            await sio.emit('error', {'msg': f"Authentication error: {str(e)}"}, room=sid)
 
 @sio.event
 async def start_registration(sid):
-    """Start the face registration camera loop."""
+    """Start or switch to face registration camera mode."""
     global authenticator
-    print("[SERVER] Starting face registration...")
+    print("[SERVER] Starting face registration mode...")
     if not authenticator:
         try:
             authenticator = _create_authenticator()
         except Exception as e:
-            await sio.emit('error', {'msg': f"Failed to create authenticator: {str(e)}"})
+            await sio.emit('error', {'msg': f"Failed to create authenticator: {str(e)}"}, room=sid)
             return
     
     success = authenticator.start_registration_loop()
     if success:
         await sio.emit('auth_status', {'authenticated': False, 'is_registering': True})
     else:
-        await sio.emit('error', {'msg': 'A face is already registered. Clear face data first.'})
+        await sio.emit('error', {'msg': 'Failed to initialize camera for face registration.'}, room=sid)
 
 @sio.event
-async def capture_registration(sid):
+async def start_enrollment(sid):
+    """Trigger progressive 5-sample biometric enrollment."""
+    global authenticator
+    print("[SERVER] start_enrollment event received.")
+    if not authenticator:
+        authenticator = _create_authenticator()
+    authenticator.start_registration_loop()
+    authenticator.start_enrollment_sequence()
+    await sio.emit('enroll_progress', {'progress': 0, 'samples': 0, 'total': 5, 'message': 'Position face and hold steady...'})
+
+@sio.event
+async def capture_registration(sid, data=None):
     """Capture the current frame and register it as the reference face."""
     global authenticator
     print("[SERVER] Capturing face for registration...")
     if not authenticator:
-        await sio.emit('error', {'msg': 'Authenticator not initialized.'})
+        await sio.emit('error', {'msg': 'Authenticator not initialized.'}, room=sid)
         return
     
-    success, message = authenticator.register_current_face()
+    frame_b64 = None
+    if isinstance(data, dict):
+        frame_b64 = data.get('image')
+        
+    success, message = authenticator.register_current_face(frame_b64=frame_b64)
     if success:
         # Enable face auth in settings
         SETTINGS["face_auth_enabled"] = True
         save_settings()
         await sio.emit('registration_success', {'message': message})
-        await sio.emit('auth_status', {'authenticated': True})
+        await sio.emit('registration_status', {'registered': True})
+        await sio.emit('auth_status', {'authenticated': True, 'just_registered': True})
         await sio.emit('settings', get_settings_payload())
         print(f"[SERVER] Face registered successfully. Face auth enabled.")
     else:
-        await sio.emit('error', {'msg': message})
+        await sio.emit('error', {'msg': message}, room=sid)
 
 @sio.event
 async def reset_registration(sid):

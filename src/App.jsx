@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState, useRef, useCallback } from 'react';
 import io from 'socket.io-client';
 
 import Visualizer from './components/Visualizer';
@@ -7,7 +7,7 @@ import CadWindow from './components/CadWindow';
 import BrowserWindow from './components/BrowserWindow';
 import ChatModule from './components/ChatModule';
 import ToolsModule from './components/ToolsModule';
-import { Mic, MicOff, Settings, X, Minus, Power, Video, VideoOff, Layout, Hand, Printer, Clock } from 'lucide-react';
+import { Mic, MicOff, Settings, X, Minus, Power, Video, VideoOff, Layout, Hand, Printer, Clock, Wifi, WifiOff, Lock } from 'lucide-react';
 import { FilesetResolver, HandLandmarker, FaceLandmarker } from '@mediapipe/tasks-vision';
 // MemoryPrompt removed - memory is now actively saved to project
 import ConfirmationPopup from './components/ConfirmationPopup';
@@ -19,8 +19,21 @@ import SettingsWindow from './components/SettingsWindow';
 
 
 
-const socket = io('http://127.0.0.1:8000', { transports: ['websocket'] });
-const { ipcRenderer } = window.require('electron');
+const socket = io('http://127.0.0.1:8000', {
+    transports: ['websocket'],
+    reconnection: true,
+    reconnectionAttempts: Infinity,
+    reconnectionDelay: 1000,
+    reconnectionDelayMax: 5000,
+});
+
+// Use secure preload bridge instead of direct Node.js access
+const electronAPI = window.electronAPI || {
+    minimize: () => {},
+    maximize: () => {},
+    close: () => {},
+    platform: 'unknown',
+};
 
 // Global variables to prevent duplicate HandLandmarker and FaceLandmarker initialization in React.StrictMode
 let globalHandLandmarker = null;
@@ -43,6 +56,17 @@ function App() {
         return localStorage.getItem('face_auth_enabled') === 'true';
     });
     const [isFaceRegistered, setIsFaceRegistered] = useState(false);
+
+    const handleAuthSuccess = useCallback((val) => {
+        setIsAuthenticated(Boolean(val));
+        setIsLockScreenVisible(false);
+    }, []);
+
+    const handleAuthComplete = useCallback(() => {
+        setIsAuthenticated(true);
+        setIsLockScreenVisible(false);
+    }, []);
+
 
 
     const [isConnected, setIsConnected] = useState(true); // Power state DEFAULT ON
@@ -193,6 +217,30 @@ function App() {
         return () => clearInterval(timer);
     }, []);
 
+    // Global Keyboard Shortcuts
+    useEffect(() => {
+        const handleKeyDown = (e) => {
+            // Ctrl+M: Toggle Mute
+            if (e.ctrlKey && e.key.toLowerCase() === 'm') {
+                e.preventDefault();
+                toggleMute();
+            }
+            // Esc: Close Modals / Windows
+            if (e.key === 'Escape') {
+                if (confirmationRequest) {
+                    handleDenyTool();
+                }
+                setShowSettings(false);
+                setShowKasaWindow(false);
+                setShowPrinterWindow(false);
+                setShowCadWindow(false);
+                setShowBrowserWindow(false);
+            }
+        };
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [isMuted, isConnected, confirmationRequest]);
+
     // Centering Logic (Startup & Resize)
     useEffect(() => {
         const centerElements = () => {
@@ -330,18 +378,20 @@ function App() {
         socket.on('connect', () => {
             setStatus('Connected');
             setSocketConnected(true);
+            addMessage('System', 'Connected to Smarty backend.');
             socket.emit('get_settings');
         });
         socket.on('disconnect', () => {
             setStatus('Disconnected');
             setSocketConnected(false);
+            addMessage('System', '⚠️ Lost connection to Smarty backend. Attempting to reconnect...');
         });
         socket.on('status', (data) => {
             addMessage('System', data.msg);
             // Update status bar based on backend messages
-            if (data.msg === 'A.D.A Started') {
+            if (data.msg === 'Smarty Started') {
                 setStatus('Model Connected');
-            } else if (data.msg === 'A.D.A Stopped') {
+            } else if (data.msg === 'Smarty Stopped') {
                 setStatus('Connected');
             }
         });
@@ -358,14 +408,20 @@ function App() {
             setAiAudioData(data.data);
         });
         socket.on('auth_status', (data) => {
-            console.log("Auth Status:", data);
-            setIsAuthenticated(data.authenticated);
-            if (data.authenticated) {
-                // Authenticated - hide lock screen after animation
-                // Don't immediately hide - let AuthLock handle its animation
-            } else {
-                // Not authenticated - show lock screen
+            console.log("[App] Auth Status received:", data);
+            if (!data.authenticated) {
+                setIsAuthenticated(false);
                 setIsLockScreenVisible(true);
+            } else {
+                // If the lock screen is currently visible, AuthLock handles its unlock animation
+                // and invokes onAuthenticated() when ready.
+                // If lock screen was not visible, immediately authenticate.
+                setIsLockScreenVisible(prev => {
+                    if (!prev) {
+                        setIsAuthenticated(true);
+                    }
+                    return prev;
+                });
             }
         });
 
@@ -378,6 +434,7 @@ function App() {
             if (settings && typeof settings.is_face_registered !== 'undefined') {
                 setIsFaceRegistered(settings.is_face_registered);
             }
+
         });
         socket.on('error', (data) => {
             console.error("Socket Error:", data);
@@ -726,6 +783,66 @@ function App() {
             console.log('[Settings] Saved webcam:', selectedWebcamId);
         }
     }, [selectedWebcamId]);
+
+    // Synthesize Red Alert Siren using Web Audio API during overload mode
+    useEffect(() => {
+        if (!overloadActive) return;
+
+        const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+        if (!AudioContextClass) return;
+
+        let audioCtx;
+        let osc1;
+        let osc2;
+        let lfo;
+        let lfoGain;
+        let gainNode;
+
+        try {
+            audioCtx = new AudioContextClass();
+            osc1 = audioCtx.createOscillator();
+            osc2 = audioCtx.createOscillator();
+            gainNode = audioCtx.createGain();
+
+            osc1.type = 'sawtooth';
+            osc2.type = 'sine';
+
+            osc1.frequency.setValueAtTime(550, audioCtx.currentTime);
+            osc2.frequency.setValueAtTime(275, audioCtx.currentTime);
+
+            lfo = audioCtx.createOscillator();
+            lfo.frequency.value = 1.6;
+            
+            lfoGain = audioCtx.createGain();
+            lfoGain.gain.value = 150;
+
+            lfo.connect(lfoGain);
+            lfoGain.connect(osc1.frequency);
+            lfoGain.connect(osc2.frequency);
+
+            osc1.connect(gainNode);
+            osc2.connect(gainNode);
+            gainNode.connect(audioCtx.destination);
+
+            lfo.start();
+            osc1.start();
+            osc2.start();
+
+            // Set soft volume to be dramatic but not piercing
+            gainNode.gain.setValueAtTime(0.08, audioCtx.currentTime);
+        } catch (e) {
+            console.error("Failed to play red alert siren:", e);
+        }
+
+        return () => {
+            try {
+                if (osc1) osc1.stop();
+                if (osc2) osc2.stop();
+                if (lfo) lfo.stop();
+                if (audioCtx) audioCtx.close();
+            } catch (err) {}
+        };
+    }, [overloadActive]);
 
     // Start/Stop Mic Visualizer
     useEffect(() => {
@@ -1384,20 +1501,19 @@ function App() {
         }
     };
 
-    const handleMinimize = () => ipcRenderer.send('window-minimize');
-    const handleMaximize = () => ipcRenderer.send('window-maximize');
+    const handleMinimize = () => electronAPI.minimize();
+    const handleMaximize = () => electronAPI.maximize();
 
     // Close Application - memory is now actively saved to project, no prompt needed
     const handleCloseRequest = () => {
         // Emit shutdown signal to backend for graceful shutdown
         // Use volatile emit with timeout fallback to ensure window closes even if server is unresponsive
-        const closeWindow = () => ipcRenderer.send('window-close');
+        const closeWindow = () => electronAPI.close();
 
         if (socket.connected) {
-            console.log('[APP] Sending shutdown signal to backend...');
             socket.emit('shutdown', {}, (ack) => {
                 // This callback may not be called if server uses os._exit
-                console.log('[APP] Shutdown acknowledged');
+                // Shutdown acknowledged
                 closeWindow();
             });
             // Fallback: close after 500ms if ack doesn't come back
@@ -1603,21 +1719,54 @@ function App() {
 
 
     return (
-        <div className={`h-screen w-screen bg-black text-cyan-100 font-mono overflow-hidden flex flex-col relative selection:bg-cyan-900 selection:text-white transition-all duration-500 ${overloadActive ? 'red-alert-screen shadow-[inset_0_0_80px_rgba(239,68,68,0.35)]' : ''}`}>
+        <div className={`h-screen w-screen bg-black text-cyan-100 overflow-hidden flex flex-col relative selection:bg-cyan-900 selection:text-white transition-all duration-500 ${overloadActive ? 'red-alert-screen overload-jitter shadow-[inset_0_0_80px_rgba(239,68,68,0.35)]' : ''}`}
+            style={{ fontFamily: 'var(--font-mono)' }}
+        >
             {/* Red Alert Pulsing Screen Overlay */}
             {overloadActive && (
-                <div className="absolute inset-0 bg-red-950/5 border-[8px] border-red-500/25 pointer-events-none z-50 animate-pulse mix-blend-color-burn" style={{ animationDuration: '0.8s' }}></div>
+                <>
+                    <div className="absolute inset-0 bg-red-950/5 border-[8px] border-red-500/25 pointer-events-none z-50 animate-pulse mix-blend-color-burn" style={{ animationDuration: '0.8s' }}></div>
+                    
+                    {/* Top Emergency warning banner */}
+                    <div className="absolute top-10 left-0 right-0 bg-red-600/90 text-white font-black text-xs py-1 z-[49] flex items-center justify-center gap-6 overflow-hidden tracking-[0.3em] shadow-[0_0_15px_rgba(239,68,68,0.7)] overload-flicker uppercase select-none">
+                        <span>⚠️ WARNING: CORE OVERHEAT DETECTED (98.4°C) ⚠️</span>
+                        <span>SYSTEM OVERLOAD ACTIVE</span>
+                        <span>DANGER: COOLANT PRESSURE VENTING REQUIRED</span>
+                        <span>⚠️ WARNING: CORE OVERHEAT DETECTED (98.4°C) ⚠️</span>
+                    </div>
+
+                    {/* Bottom Emergency warning status */}
+                    <div className="absolute bottom-0 left-0 right-0 bg-red-950/90 border-t border-red-500/50 text-red-500 font-bold text-[9px] py-1 z-[49] flex justify-between px-4 overflow-hidden tracking-[0.2em] font-mono select-none">
+                        <span>COOLANT CORE: VENT STATUS [PENDING]</span>
+                        <span>SHIELD DAMPENERS: 12%</span>
+                        <span>PRIMARY CONTAINMENT FIELD: FLICKERING</span>
+                    </div>
+
+                    {/* Left margin falling codes */}
+                    <div className="absolute top-16 left-4 bottom-8 pointer-events-none z-[45] flex flex-col gap-2 w-28 overflow-hidden text-[9px] text-red-500/40 font-mono select-none animate-pulse">
+                        <span>ERR_CORE_TEMP_HIGH</span>
+                        <span>INJECT_COOLANT: FAIL</span>
+                        <span>PRESSURE: 850kPA</span>
+                        <span>VENT_VALVE: LOCKED</span>
+                        <span>SHIELD_FIELD: UNSTABLE</span>
+                        <span>CONTAINMENT_WARN</span>
+                        <span>REACTOR_TEMP: 1040K</span>
+                        <span>SYS_OVERLOAD_98%</span>
+                    </div>
+
+                    {/* Right margin falling codes */}
+                    <div className="absolute top-16 right-4 bottom-8 pointer-events-none z-[45] flex flex-col gap-2 w-28 overflow-hidden text-[9px] text-red-500/40 font-mono select-none animate-pulse" style={{ animationDelay: '0.2s' }}>
+                        <span>DANGER_ZONE_ACTIVE</span>
+                        <span>SYS_OVERLOAD_98%</span>
+                        <span>TERMINAL_ALERT</span>
+                        <span>ERR_VENT_FAIL</span>
+                        <span>COOLANT_SYS: FAIL</span>
+                        <span>DAMPENERS_LOCKED</span>
+                        <span>SHIELDS_AT_MIN</span>
+                        <span>CORE_VENT: PENDING</span>
+                    </div>
+                </>
             )}
-
-            {/* --- PREMIUM UI LAYER --- */}
-
-            {/* --- PREMIUM UI LAYER --- */}
-
-            {/* --- PREMIUM UI LAYER --- */}
-
-
-
-            {/* --- PREMIUM UI LAYER --- */}
 
             {/* Hand Cursor - Only show if tracking is enabled */}
             {isVideoOn && isHandTrackingEnabled && (
@@ -1650,10 +1799,15 @@ function App() {
             <div className="z-50 flex items-center justify-between p-2 border-b border-cyan-500/20 bg-black/40 backdrop-blur-md select-none sticky top-0" style={{ WebkitAppRegion: 'drag' }}>
                 <div className="flex items-center gap-4 pl-2">
                     <h1 className="text-xl font-bold tracking-[0.2em] text-cyan-400 drop-shadow-[0_0_10px_rgba(34,211,238,0.5)]">
-                        A.D.A
+                        SMARTY
                     </h1>
-                    <div className="text-[10px] text-cyan-700 border border-cyan-900 px-1 rounded">
-                        V2.0.0
+                    <div className="text-[10px] text-cyan-700 border border-cyan-900 px-1.5 py-0.5 rounded">
+                        V1.0.0
+                    </div>
+                    {/* Connection Status */}
+                    <div className={`flex items-center gap-1.5 text-[10px] px-2 py-0.5 rounded border ${socketConnected ? 'text-green-400 border-green-500/30 bg-green-500/10' : 'text-red-400 border-red-500/30 bg-red-500/10'}`}>
+                        <div className={`w-1.5 h-1.5 rounded-full ${socketConnected ? 'bg-green-400 status-dot-connected' : 'bg-red-400 animate-pulse'}`} />
+                        <span>{socketConnected ? 'Online' : 'Offline'}</span>
                     </div>
                     {/* FPS Counter */}
                     {isVideoOn && (
@@ -1688,6 +1842,17 @@ function App() {
                         <Clock size={12} className="text-cyan-500/50" />
                         <span>{currentTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
                     </div>
+
+                    {/* Biometric Face Lock Button */}
+                    {faceAuthEnabled && (
+                        <button
+                            onClick={() => socket.emit('lock_system')}
+                            className="p-1 hover:bg-cyan-900/50 rounded text-cyan-400 hover:text-cyan-200 transition-colors"
+                            title="Lock System (Biometric Face Lock)"
+                        >
+                            <Lock size={15} />
+                        </button>
+                    )}
                     <button onClick={handleMinimize} className="p-1 hover:bg-cyan-900/50 rounded text-cyan-500 transition-colors">
                         <Minus size={18} />
                     </button>
@@ -1734,7 +1899,7 @@ function App() {
 
                 {/* Video Feed Overlay */}
                 {/* Floating Project Label */}
-                <div className="absolute top-[70px] left-1/2 -translate-x-1/2 text-cyan-500 text-xs font-mono tracking-widest pointer-events-none z-50 bg-black/50 px-2 py-1 rounded backdrop-blur-sm border border-cyan-500/20">
+                <div className="absolute top-[70px] left-1/2 -translate-x-1/2 text-cyan-500 text-xs tracking-widest pointer-events-none z-50 bg-black/50 px-3 py-1 rounded-lg backdrop-blur-sm border border-cyan-500/20">
                     PROJECT: {currentProject?.toUpperCase()}
                 </div>
 
@@ -1780,6 +1945,8 @@ function App() {
                         setCursorSensitivity={setCursorSensitivity}
                         faceAuthEnabled={faceAuthEnabled}
                         isFaceRegistered={isFaceRegistered}
+                        micAudioData={micAudioData}
+
                         onClose={() => setShowSettings(false)}
                     />
                 )}
@@ -1941,15 +2108,11 @@ function App() {
             </div>
 
             {/* Face Authentication Lock Screen */}
-            {isLockScreenVisible && !isAuthenticated && (
+            {isLockScreenVisible && (
                 <AuthLock
                     socket={socket}
-                    onAuthenticated={(val) => {
-                        setIsAuthenticated(val);
-                    }}
-                    onAnimationComplete={() => {
-                        setIsLockScreenVisible(false);
-                    }}
+                    onAuthenticated={handleAuthSuccess}
+                    onAnimationComplete={handleAuthComplete}
                 />
             )}
         </div>

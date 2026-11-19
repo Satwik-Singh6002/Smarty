@@ -33,6 +33,8 @@ const SettingsWindow = ({
     setCursorSensitivity,
     faceAuthEnabled,
     isFaceRegistered,
+    micAudioData = [],
+
     onClose
 }) => {
     const [permissions, setPermissions] = useState({});
@@ -42,12 +44,36 @@ const SettingsWindow = ({
     const [isCapturing, setIsCapturing] = useState(false);
     const [showClearConfirm, setShowClearConfirm] = useState(false);
 
+    // Audio Threshold settings states
+    const [bargeInEnabled, setBargeInEnabled] = useState(true);
+    const [bargeInThreshold, setBargeInThreshold] = useState(5000);
+    const [normalVadThreshold, setNormalVadThreshold] = useState(800);
+    const [voiceEnergyThreshold, setVoiceEnergyThreshold] = useState(300);
+    const [smartyVoice, setSmartyVoice] = useState('en-US-AvaMultilingualNeural');
+
     useEffect(() => {
         socket.emit('get_settings');
 
         const handleSettings = (settings) => {
-            if (settings && settings.tool_permissions) {
-                setPermissions(settings.tool_permissions);
+            if (settings) {
+                if (settings.tool_permissions) {
+                    setPermissions(settings.tool_permissions);
+                }
+                if (typeof settings.barge_in_enabled !== 'undefined') {
+                    setBargeInEnabled(settings.barge_in_enabled);
+                }
+                if (typeof settings.barge_in_threshold !== 'undefined') {
+                    setBargeInThreshold(settings.barge_in_threshold);
+                }
+                if (typeof settings.normal_vad_threshold !== 'undefined') {
+                    setNormalVadThreshold(settings.normal_vad_threshold);
+                }
+                if (typeof settings.voice_energy_threshold !== 'undefined') {
+                    setVoiceEnergyThreshold(settings.voice_energy_threshold);
+                }
+                if (settings.smarty_voice) {
+                    setSmartyVoice(settings.smarty_voice);
+                }
             }
         };
 
@@ -102,6 +128,34 @@ const SettingsWindow = ({
         }
         socket.emit('update_settings', { face_auth_enabled: newVal });
     };
+
+    const handleBargeInToggle = () => {
+        const nextVal = !bargeInEnabled;
+        setBargeInEnabled(nextVal);
+        socket.emit('update_settings', { barge_in_enabled: nextVal });
+    };
+
+    const handleBargeInThresholdChange = (val) => {
+        setBargeInThreshold(val);
+        socket.emit('update_settings', { barge_in_threshold: val });
+    };
+
+    const handleNormalVadThresholdChange = (val) => {
+        setNormalVadThreshold(val);
+        socket.emit('update_settings', { normal_vad_threshold: val });
+    };
+
+    const handleVoiceEnergyThresholdChange = (val) => {
+        setVoiceEnergyThreshold(val);
+        socket.emit('update_settings', { voice_energy_threshold: val });
+    };
+
+    const handleVoiceChange = (val) => {
+        setSmartyVoice(val);
+        socket.emit('update_settings', { smarty_voice: val });
+    };
+
+
 
     const handleAddFace = () => {
         if (isFaceRegistered) {
@@ -273,6 +327,7 @@ const SettingsWindow = ({
                 )}
             </div>
 
+
             {/* Microphone Section */}
             <div className="mb-4">
                 <h3 className="text-cyan-400 font-bold mb-2 text-xs uppercase tracking-wider opacity-80">Microphone</h3>
@@ -338,6 +393,102 @@ const SettingsWindow = ({
                 />
             </div>
 
+            {/* Audio Settings Section */}
+            <div className="mb-6 border-t border-cyan-900/30 pt-4">
+                <h3 className="text-cyan-400 font-bold mb-3 text-xs uppercase tracking-wider opacity-80 flex items-center gap-1.5">
+                    <span>🎤</span> Voice Control & Interruption
+                </h3>
+
+                {/* Voice Persona Dropdown */}
+                <div className="mb-4">
+                    <span className="text-xs text-cyan-100/80 font-bold block mb-1.5">Smarty Voice Persona</span>
+                    <select
+                        value={smartyVoice}
+                        onChange={(e) => handleVoiceChange(e.target.value)}
+                        className="w-full bg-gray-900 border border-cyan-800 rounded p-2 text-xs text-cyan-100 focus:border-cyan-400 outline-none"
+                    >
+                        <option value="en-US-AvaMultilingualNeural">Ava (Multilingual Female - Melting & Clear)</option>
+                        <option value="en-US-EmmaMultilingualNeural">Emma (Multilingual Female - Soft & Soothing)</option>
+                        <option value="en-US-AndrewMultilingualNeural">Andrew (Multilingual Male - Warm & Clear)</option>
+                        <option value="en-US-BrianMultilingualNeural">Brian (Multilingual Male - Smooth & Calm)</option>
+                        <option value="en-GB-SoniaNeural">Sonia (UK Female - Rich & Clear, English-only)</option>
+                        <option value="en-GB-RyanNeural">Ryan (UK Male - Classic Smarty, English-only)</option>
+                    </select>
+                </div>
+
+                {/* Real-time Mic Level */}
+                <div className="mb-4 bg-gray-900/50 border border-cyan-900/30 p-2.5 rounded text-xs">
+                    <div className="flex justify-between mb-1.5 text-[10px] text-cyan-300/70 font-bold tracking-wider">
+                        <span>MIC INPUT ENERGY</span>
+                        <span>{Math.min(100, Math.round((((micAudioData || []).reduce((sum, val) => sum + val, 0) / Math.max(1, micAudioData.length)) / 150) * 100))}%</span>
+                    </div>
+                    <div className="w-full bg-gray-800 rounded-full h-2 overflow-hidden border border-cyan-900/30 relative">
+                        <div 
+                            className="bg-gradient-to-r from-cyan-500 via-emerald-500 to-amber-500 h-full transition-all duration-75"
+                            style={{ width: `${Math.min(100, Math.round((((micAudioData || []).reduce((sum, val) => sum + val, 0) / Math.max(1, micAudioData.length)) / 150) * 100))}%` }}
+                        />
+                    </div>
+                </div>
+
+                {/* Barge-in prevention toggle */}
+                <div className="flex items-center justify-between text-xs bg-gray-900/50 p-3 rounded border border-cyan-900/30 mb-3">
+                    <div className="flex flex-col">
+                        <span className="text-cyan-100/80 font-bold">Mute mic during speech</span>
+                        <span className="text-[9px] text-cyan-500/60 mt-0.5">Mutes the input while Smarty speaks to prevent echo loopback</span>
+                    </div>
+                    <button
+                        onClick={handleBargeInToggle}
+                        className={`relative w-8 h-4 rounded-full transition-colors duration-200 ${bargeInEnabled ? 'bg-cyan-500/80' : 'bg-gray-700'}`}
+                    >
+                        <div
+                            className={`absolute top-0.5 left-0.5 w-3 h-3 bg-white rounded-full transition-transform duration-200 ${bargeInEnabled ? 'translate-x-4' : 'translate-x-0'}`}
+                        />
+                    </button>
+                </div>
+
+                {/* Normal VAD Threshold Slider */}
+                <div className="mb-4">
+                    <div className="flex justify-between mb-1.5">
+                        <span className="text-xs text-cyan-100/80">User Speech VAD Threshold</span>
+                        <span className="text-xs text-cyan-500">{normalVadThreshold}</span>
+                    </div>
+                    <input
+                        type="range"
+                        min="100"
+                        max="3000"
+                        step="50"
+                        value={normalVadThreshold}
+                        onChange={(e) => handleNormalVadThresholdChange(parseInt(e.target.value))}
+                        className="w-full accent-cyan-400 cursor-pointer h-1 bg-gray-800 rounded-lg appearance-none"
+                    />
+                    <div className="flex justify-between text-[8px] text-cyan-500/40 mt-1 uppercase font-bold tracking-wider">
+                        <span>High (100)</span>
+                        <span>Low (3000)</span>
+                    </div>
+                </div>
+
+                {/* Speech Recognition Energy Threshold Slider */}
+                <div className="mb-4">
+                    <div className="flex justify-between mb-1.5">
+                        <span className="text-xs text-cyan-100/80">OpenRouter Voice Threshold</span>
+                        <span className="text-xs text-cyan-500">{voiceEnergyThreshold}</span>
+                    </div>
+                    <input
+                        type="range"
+                        min="50"
+                        max="1500"
+                        step="25"
+                        value={voiceEnergyThreshold}
+                        onChange={(e) => handleVoiceEnergyThresholdChange(parseInt(e.target.value))}
+                        className="w-full accent-cyan-400 cursor-pointer h-1 bg-gray-800 rounded-lg appearance-none"
+                    />
+                    <div className="flex justify-between text-[8px] text-cyan-500/40 mt-1 uppercase font-bold tracking-wider">
+                        <span>High (50)</span>
+                        <span>Low (1500)</span>
+                    </div>
+                </div>
+            </div>
+
             {/* Tool Permissions Section */}
             <div className="mb-6">
                 <h3 className="text-cyan-400 font-bold mb-3 text-xs uppercase tracking-wider opacity-80">Tool Confirmations</h3>
@@ -373,4 +524,4 @@ const SettingsWindow = ({
     );
 };
 
-export default SettingsWindow;
+export default React.memo(SettingsWindow);

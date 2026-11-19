@@ -51,4 +51,11 @@ const TopAudioBar = ({ audioData }) => {
     );
 };
 
-export default TopAudioBar;
+export default React.memo(TopAudioBar, (prevProps, nextProps) => {
+    if (prevProps.audioData === nextProps.audioData) return true;
+    if (prevProps.audioData.length !== nextProps.audioData.length) return false;
+    for (let i = 0; i < prevProps.audioData.length; i++) {
+        if (prevProps.audioData[i] !== nextProps.audioData[i]) return false;
+    }
+    return true;
+});

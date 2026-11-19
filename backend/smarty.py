@@ -34,7 +34,8 @@ MODEL = "models/gemini-2.5-flash-native-audio-preview-12-2025"
 DEFAULT_MODE = "camera"
 
 load_dotenv()
-client = genai.Client(http_options={"api_version": "v1beta"}, api_key=os.getenv("GEMINI_API_KEY"))
+api_key = os.getenv("GEMINI_API_KEY") or "DUMMY_KEY_FOR_TESTING"
+client = genai.Client(http_options={"api_version": "v1beta"}, api_key=api_key)
 
 # Function definitions
 trigger_overload_protocol = {
@@ -489,24 +490,9 @@ class AudioLoop:
                 else:
                     rms = 0
                 
-                # Barge-in Prevention Logic
-                # Always mute when Smarty is speaking, with a brief buffer period to prevent loopback
+                # Always mute when Smarty is speaking to prevent loopback and loop interruptions
                 if self._is_ada_speaking and self._mute_during_ada_speech:
-                    # Check if we're still in the mute buffer period
-                    if self._ada_speech_start_time and (time.time() - self._ada_speech_start_time) < self._mute_buffer_duration:
-                        # Within mute buffer - block ALL audio (no interruptions allowed yet)
-                        # This prevents Smarty's voice from being picked up by the mic
-                        continue
-                    
-                    # After mute buffer - only allow VERY loud interruptions
-                    if rms > self._barge_in_threshold:
-                        # Very loud sound detected - likely user is shouting to interrupt
-                        print(f"[ADA DEBUG] [BARGE-IN] User interrupting! RMS: {rms}")
-                        # Allow the audio to be sent (barge-in allowed)
-                        pass
-                    else:
-                        # Not loud enough to be an interruption - mute it
-                        continue
+                    continue
                 
                 # 1. Send Audio (only if not muted by above logic)
                 if self.out_queue:

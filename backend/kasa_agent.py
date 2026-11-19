@@ -1,5 +1,5 @@
 import asyncio
-from kasa import Discover, SmartDevice, SmartBulb, SmartPlug
+from kasa import Discover
 
 class KasaAgent:
     def __init__(self, known_devices=None):
@@ -206,6 +206,36 @@ class KasaAgent:
             except Exception as e:
                  print(f"Error setting color for {target}: {e}")
         return False
+
+    async def control_device(self, target: str, action: str, brightness=None, color=None):
+        """Unified device controller method for agents and tool invocations."""
+        action = (action or "").lower().strip()
+        success = False
+        msg = f"Action '{action}' on '{target}' failed."
+
+        if action == "turn_on":
+            success = await self.turn_on(target)
+            if success:
+                msg = f"Turned ON '{target}'."
+        elif action == "turn_off":
+            success = await self.turn_off(target)
+            if success:
+                msg = f"Turned OFF '{target}'."
+        elif action == "set":
+            success = True
+            msg = f"Updated '{target}':"
+
+        if success or action == "set":
+            if brightness is not None:
+                sb = await self.set_brightness(target, brightness)
+                if sb:
+                    msg += f" Set brightness to {brightness}%."
+            if color is not None:
+                sc = await self.set_color(target, color)
+                if sc:
+                    msg += f" Set color to {color}."
+
+        return {"success": success, "message": msg}
 
 # Standalone test
 if __name__ == "__main__":
